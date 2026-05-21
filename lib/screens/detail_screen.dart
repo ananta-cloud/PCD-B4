@@ -3,7 +3,7 @@ import 'package:google_fonts/google_fonts.dart';
 import '../core/app_colors.dart';
 import '../core/app_text_styles.dart';
 import '../models/receipt.dart';
-import '../services/mock_receipt_service.dart';
+import '../repositories/mock_receipt_repository.dart';
 
 class DetailScreen extends StatefulWidget {
   final Receipt receipt;
@@ -52,7 +52,7 @@ class _DetailScreenState extends State<DetailScreen> with SingleTickerProviderSt
       ),
     );
     if (confirmed == true && mounted) {
-      MockReceiptService.deleteReceipt(widget.receipt.id);
+      MockReceiptRepository.deleteReceipt(widget.receipt.id);
       Navigator.pop(context);
     }
   }

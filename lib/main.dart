@@ -2,10 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'core/app_theme.dart';
 import 'core/app_colors.dart';
-import 'views/login_screen.dart';
-import 'views/scan_screen.dart';
-import 'views/history_screen.dart';
-import 'views/reports_screen.dart';
+import 'screens/login_screen.dart';
+import 'screens/scan_screen.dart';
+import 'screens/history_screen.dart';
+import 'screens/reports_screen.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();

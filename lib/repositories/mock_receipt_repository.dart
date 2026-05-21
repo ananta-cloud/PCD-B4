@@ -1,7 +1,7 @@
 import '../models/receipt.dart';
 
 /// Fake in-memory data — replace with Hive in production
-class MockReceiptService {
+class MockReceiptRepository {
   static final List<Receipt> _receipts = [
     Receipt(
       id: '1',

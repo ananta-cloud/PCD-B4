@@ -3,7 +3,7 @@ import 'package:google_fonts/google_fonts.dart';
 import '../core/app_colors.dart';
 import '../core/app_text_styles.dart';
 import '../models/receipt.dart';
-import '../services/mock_receipt_service.dart';
+import '../repositories/mock_receipt_repository.dart';
 import 'detail_screen.dart';
 
 class HistoryScreen extends StatefulWidget {
@@ -21,7 +21,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
     _load();
   }
 
-  void _load() => setState(() => _receipts = MockReceiptService.getAll());
+  void _load() => setState(() => _receipts = MockReceiptRepository.getAll());
 
   // Group by day
   Map<String, List<Receipt>> get _grouped {
@@ -37,7 +37,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final pending = MockReceiptService.pendingCount;
+    final pending = MockReceiptRepository.pendingCount;
     return Scaffold(
       appBar: AppBar(
         title: const Text('ReceiptSync'),

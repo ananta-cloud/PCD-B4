@@ -2,17 +2,17 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../core/app_colors.dart';
 import '../core/app_text_styles.dart';
-import '../services/mock_receipt_service.dart';
+import '../repositories/mock_receipt_repository.dart';
 
 class ReportsScreen extends StatelessWidget {
   const ReportsScreen({super.key});
 
   @override
   Widget build(BuildContext context) {
-    final total = MockReceiptService.totalSpending;
-    final scanned = MockReceiptService.totalScanned;
-    final syncProgress = MockReceiptService.syncProgress;
-    final pending = MockReceiptService.pendingCount;
+    final total = MockReceiptRepository.totalSpending;
+    final scanned = MockReceiptRepository.totalScanned;
+    final syncProgress = MockReceiptRepository.syncProgress;
+    final pending = MockReceiptRepository.pendingCount;
 
     return Scaffold(
       appBar: AppBar(
