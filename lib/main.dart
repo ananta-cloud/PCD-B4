@@ -1,14 +1,20 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'core/app_theme.dart';
 import 'core/app_colors.dart';
 import 'screens/login_screen.dart';
 import 'screens/scan_screen.dart';
 import 'screens/history_screen.dart';
 import 'screens/reports_screen.dart';
+import 'services/mongo_service.dart';
 
-void main() {
+void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  await dotenv.load(fileName: ".env");
+  await MongoService.connect();
+  
   SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
   SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
     statusBarColor: Colors.transparent,
@@ -16,6 +22,7 @@ void main() {
     systemNavigationBarColor: AppColors.surfaceContainerLow,
     systemNavigationBarIconBrightness: Brightness.light,
   ));
+
   runApp(const SmartReceiptScannerApp());
 }
 
@@ -45,11 +52,8 @@ class _MainShellState extends State<MainShell> {
   int _currentIndex = 0;
 
   static const _screens = [
-    ScanScreen(),
-    HistoryScreen(),
-    ReportsScreen(),
+    ScanScreen(),HistoryScreen(),ReportsScreen()
   ];
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(

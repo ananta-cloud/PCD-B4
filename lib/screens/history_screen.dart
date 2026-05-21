@@ -3,17 +3,19 @@ import 'package:google_fonts/google_fonts.dart';
 import '../core/app_colors.dart';
 import '../core/app_text_styles.dart';
 import '../models/receipt.dart';
-import '../repositories/mock_receipt_repository.dart';
+import '../services/mongo_service.dart';
 import 'detail_screen.dart';
 
 class HistoryScreen extends StatefulWidget {
   const HistoryScreen({super.key});
+
   @override
   State<HistoryScreen> createState() => _HistoryScreenState();
 }
 
 class _HistoryScreenState extends State<HistoryScreen> {
-  List<Receipt> _receipts = [];
+  // Kita menggunakan Future agar bisa dipakai oleh FutureBuilder
+  late Future<List<Map<String, dynamic>>> _receiptsFuture;
 
   @override
   void initState() {
@@ -21,14 +23,26 @@ class _HistoryScreenState extends State<HistoryScreen> {
     _load();
   }
 
-  void _load() => setState(() => _receipts = MockReceiptRepository.getAll());
+  void _load() {
+    setState(() {
+      _receiptsFuture = MongoService.getReceiptHistory();
+    });
+  }
 
-  // Group by day
-  Map<String, List<Receipt>> get _grouped {
+  // Fungsi untuk mengelompokkan data berdasarkan hari
+  Map<String, List<Map<String, dynamic>>> _groupData(List<Map<String, dynamic>> rawData) {
     final now = DateTime.now();
-    final Map<String, List<Receipt>> g = {};
-    for (final r in _receipts) {
-      final diff = now.difference(r.scannedAt).inDays;
+    final Map<String, List<Map<String, dynamic>>> g = {};
+    
+    for (final r in rawData) {
+      // Pastikan tipe data tanggal dari MongoDB di-handle dengan benar.
+      // Jika di MongoDB disimpen sebagai string, parse dulu: DateTime.parse(r['scanDate'])
+      // Jika disimpan sebagai Date di MongoDB, mungkin akan menjadi DateTime di Dart.
+      DateTime scannedAt = r['scanDate'] is DateTime 
+          ? r['scanDate'] 
+          : (r['scanDate'] != null ? DateTime.tryParse(r['scanDate'].toString()) ?? now : now);
+
+      final diff = now.difference(scannedAt).inDays;
       final label = diff == 0 ? 'Today' : diff == 1 ? 'Yesterday' : '$diff Days Ago';
       g.putIfAbsent(label, () => []).add(r);
     }
@@ -37,44 +51,109 @@ class _HistoryScreenState extends State<HistoryScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final pending = MockReceiptRepository.pendingCount;
+    final pendingCount = 0; 
+
     return Scaffold(
       appBar: AppBar(
-        title: const Text('ReceiptSync'),
-        actions: [_iconBtn(Icons.manage_accounts_outlined, () {})],
-        leading: _iconBtn(Icons.settings_outlined, () {}),
+      title: const Text('ReceiptSync'),
+      actions: [
+        // TOMBOL INI HANYA UNTUK TESTING INSERT DATA
+        IconButton(
+          icon: const Icon(Icons.add_circle, color: Colors.green),
+          tooltip: "Tambah Data Dummy ke MongoDB",
+          onPressed: () async {
+            // Tampilkan loading
+            ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('Menyimpan data ke MongoDB...')));
+            
+            // Sengaja mock currentUserId agar bisa insert jika kamu lewati screen Login
+            if(MongoService.currentUserId == null){
+                MongoService.currentUserId = "user_test_123";
+            }
+
+            // Panggil fungsi insert
+            bool success = await MongoService.insertReceipt("Toko ABC Dummy", 150000.0);
+            
+            if (success) {
+              // Jika berhasil, panggil _load() untuk me-refresh layar
+              _load();
+              ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Berhasil! Menarik data terbaru...')));
+            }
+          },
+        ),
+        _iconBtn(Icons.manage_accounts_outlined, () {}),
+      ],
+      leading: _iconBtn(Icons.settings_outlined, () {}),
       ),
       body: RefreshIndicator(
         onRefresh: () async => _load(),
         color: AppColors.primary,
-        child: ListView(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-          children: [
-            // Pending sync banner
-            if (pending > 0) ...[
-              _SyncBanner(pendingCount: pending),
-              const SizedBox(height: 20),
-            ],
-            // Grouped list
-            ..._grouped.entries.map((entry) => Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+        child: FutureBuilder<List<Map<String, dynamic>>>(
+          future: _receiptsFuture,
+          builder: (context, snapshot) {
+            if (snapshot.connectionState == ConnectionState.waiting) {
+              return const Center(child: CircularProgressIndicator());
+            }
+            
+            if (snapshot.hasError) {
+              return ListView( 
+                children: [
+                   Center(
+                    child: Padding(
+                      padding: const EdgeInsets.all(20.0),
+                      child: Text("Terjadi kesalahan: ${snapshot.error}", textAlign: TextAlign.center,),
+                    ),
+                  )
+                ]
+              );
+            }
+
+            final data = snapshot.data ?? [];
+            
+            if (data.isEmpty) {
+              return ListView(
+                children: const [
+                  Center(
+                    child: Padding(
+                      padding: EdgeInsets.only(top: 100),
+                      child: Text("Belum ada riwayat scan."),
+                    ),
+                  )
+                ],
+              );
+            }
+
+            final groupedData = _groupData(data);
+
+            return ListView(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
               children: [
-                Text(entry.key, style: AppTextStyles.headlineMd()),
-                const SizedBox(height: 12),
-                ...entry.value.map((r) => Padding(
-                  padding: const EdgeInsets.only(bottom: 10),
-                  child: _ReceiptCard(
-                    receipt: r,
-                    onTap: () async {
-                      await Navigator.push(context, MaterialPageRoute(builder: (_) => DetailScreen(receipt: r)));
-                      _load();
-                    },
-                  ),
+
+                if (pendingCount > 0) ...[
+                  _SyncBanner(pendingCount: pendingCount),
+                  const SizedBox(height: 20),
+                ],
+                ...groupedData.entries.map((entry) => Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(entry.key, style: AppTextStyles.headlineMd()),
+                    const SizedBox(height: 12),
+                    ...entry.value.map((r) => Padding(
+                      padding: const EdgeInsets.only(bottom: 10),
+                      child: _ReceiptCard(
+                        receiptData: r,
+                        onTap: () async {
+                          _load();
+                        },
+                      ),
+                    )),
+                    const SizedBox(height: 12),
+                  ],
                 )),
-                const SizedBox(height: 12),
               ],
-            )),
-          ],
+            );
+          },
         ),
       ),
     );
@@ -98,7 +177,7 @@ class _SyncBanner extends StatelessWidget {
       decoration: BoxDecoration(
         color: AppColors.surfaceContainerHigh,
         borderRadius: BorderRadius.circular(16),
-        border: Border(left: BorderSide(color: AppColors.syncStatusPending, width: 4)),
+        border: const Border(left: BorderSide(color: AppColors.syncStatusPending, width: 4)),
       ),
       padding: const EdgeInsets.all(16),
       child: Row(children: [
@@ -130,12 +209,21 @@ class _SyncBanner extends StatelessWidget {
 }
 
 class _ReceiptCard extends StatelessWidget {
-  final Receipt receipt;
+  // Menerima map data langsung dari MongoDB untuk dirender
+  final Map<String, dynamic> receiptData; 
   final VoidCallback onTap;
-  const _ReceiptCard({required this.receipt, required this.onTap});
+  
+  const _ReceiptCard({required this.receiptData, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
+    final merchantName = receiptData['storeName'] ?? "Unknown";
+    final amount = receiptData['totalAmount'] ?? 0;
+    
+    final formattedAmount = 'Rp $amount'; 
+    
+    final isSynced = receiptData['isSynced'] ?? true; 
+
     return GestureDetector(
       onTap: onTap,
       child: AnimatedContainer(
@@ -148,14 +236,14 @@ class _ReceiptCard extends StatelessWidget {
         padding: const EdgeInsets.all(18),
         child: Row(children: [
           Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(receipt.formattedAmount, style: AppTextStyles.headlineMd()),
+            Text(formattedAmount, style: AppTextStyles.headlineMd()),
             const SizedBox(height: 4),
             Text(
-              '${receipt.merchantName ?? "Unknown"} • ${receipt.formattedTime}',
+              merchantName, 
               style: AppTextStyles.bodyMd(),
             ),
           ])),
-          _SyncChip(isSynced: receipt.isSynced),
+          _SyncChip(isSynced: isSynced),
         ]),
       ),
     );
