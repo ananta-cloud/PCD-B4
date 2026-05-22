@@ -1,6 +1,6 @@
 import 'package:flutter/foundation.dart';
 import '../models/receipt.dart';
-import '../repositories/mock_receipt_repository.dart';
+import '../repositories/receipt_repository.dart';
 
 /// Controller untuk HistoryScreen — mengelola daftar struk dan pengelompokan.
 class HistoryController extends ChangeNotifier {
@@ -10,7 +10,7 @@ class HistoryController extends ChangeNotifier {
   List<Receipt> get receipts => _receipts;
 
   /// Jumlah struk yang belum disinkronkan
-  int get pendingCount => MockReceiptRepository.pendingCount;
+  int get pendingCount => ReceiptRepository.pendingCount;
 
   /// Struk dikelompokkan berdasarkan hari (Today, Yesterday, N Days Ago)
   Map<String, List<Receipt>> get grouped {
@@ -24,9 +24,9 @@ class HistoryController extends ChangeNotifier {
     return g;
   }
 
-  /// Muat ulang daftar struk dari repository
+  /// Muat ulang daftar struk dari Hive database
   void loadReceipts() {
-    _receipts = MockReceiptRepository.getAll();
+    _receipts = ReceiptRepository.getAll();
     notifyListeners();
   }
 }

@@ -59,8 +59,8 @@ class _DetailScreenState extends State<DetailScreen> with SingleTickerProviderSt
       ),
     );
     if (confirmed == true && mounted) {
-      _ctrl.deleteReceipt();
-      Navigator.pop(context);
+      await _ctrl.deleteReceipt();
+      if (mounted) Navigator.pop(context);
     }
   }
 

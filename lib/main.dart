@@ -1,14 +1,24 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:hive_flutter/hive_flutter.dart';
 import 'core/app_theme.dart';
 import 'core/app_colors.dart';
+import 'models/receipt.dart';
+import 'models/receipt_adapter.dart';
 import 'screens/login_screen.dart';
 import 'screens/scan_screen.dart';
 import 'screens/history_screen.dart';
 import 'screens/reports_screen.dart';
 
-void main() {
+void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // ── Hive init ───────────────────────────────────────────────────────────
+  await Hive.initFlutter();
+  Hive.registerAdapter(ReceiptAdapter());
+  await Hive.openBox<Receipt>('receipts');
+
+  // ── System UI ───────────────────────────────────────────────────────────
   SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
   SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
     statusBarColor: Colors.transparent,

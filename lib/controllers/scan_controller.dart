@@ -1,9 +1,10 @@
 import 'dart:io';
 import 'package:flutter/foundation.dart';
+import 'package:path_provider/path_provider.dart';
 import '../services/image_processing_service.dart';
 import '../services/ocr_service.dart';
 import '../models/receipt.dart';
-import '../repositories/mock_receipt_repository.dart';
+import '../repositories/receipt_repository.dart';
 
 /// Fase proses scan
 enum ScanPhase { idle, processing, result }
@@ -92,27 +93,42 @@ class ScanController extends ChangeNotifier {
     }
   }
 
-  /// Simpan hasil scan ke repository. Returns true jika berhasil.
+  /// Simpan hasil scan ke Hive database. Returns true jika berhasil.
   Future<bool> saveReceipt() async {
-    if (_isSaving || _ocrResult == null) return false;
+    if (_isSaving || _ocrResult == null || _originalFile == null) return false;
 
     _isSaving = true;
     notifyListeners();
 
-    await Future.delayed(const Duration(milliseconds: 300));
+    try {
+      // Copy gambar ke app directory agar persisten
+      final appDir = await getApplicationDocumentsDirectory();
+      final receiptDir = Directory('${appDir.path}/receipts');
+      if (!await receiptDir.exists()) {
+        await receiptDir.create(recursive: true);
+      }
 
-    MockReceiptRepository.addReceipt(Receipt(
-      id: DateTime.now().millisecondsSinceEpoch.toString(),
-      userId: 'user_001',
-      totalAmount: _ocrResult!.total,
-      confidenceScore: _ocrResult!.confidence,
-      scannedAt: DateTime.now(),
-      merchantName: 'Scanned Receipt',
-    ));
+      final id = DateTime.now().millisecondsSinceEpoch.toString();
+      final savedImage = await _originalFile!.copy('${receiptDir.path}/$id.jpg');
 
-    _isSaving = false;
-    notifyListeners();
-    return true;
+      await ReceiptRepository.addReceipt(Receipt(
+        id: id,
+        userId: 'user_001',
+        totalAmount: _ocrResult!.total,
+        confidenceScore: _ocrResult!.confidence,
+        scannedAt: DateTime.now(),
+        merchantName: 'Scanned Receipt',
+        imagePath: savedImage.path,
+      ));
+
+      _isSaving = false;
+      notifyListeners();
+      return true;
+    } catch (e) {
+      _isSaving = false;
+      notifyListeners();
+      rethrow;
+    }
   }
 
   /// Reset semua state ke idle.
