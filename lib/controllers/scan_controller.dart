@@ -63,19 +63,14 @@ class ScanController extends ChangeNotifier {
   Future<void> processImage(File file) async {
     _phase = ScanPhase.processing;
     _originalFile = file;
-    _processingStep = 'Konversi grayscale...';
+    _processingStep = 'Processing pipeline...';
     notifyListeners();
 
     try {
-      // Step 1: Grayscale (PCD — ITU-R BT.601)
-      final grayFile = await ImageProcessingService.convertToGrayscale(file);
-      _grayscaleFile = grayFile;
-      _processingStep = 'Binary thresholding...';
-      notifyListeners();
-
-      // Step 2: Threshold (PCD — Binarisasi)
-      final threshFile = await ImageProcessingService.applyThreshold(grayFile);
-      _thresholdFile = threshFile;
+      // Step 1 & 2: Grayscale + Otsu Threshold (background Isolate)
+      final processed = await ImageProcessingService.processFullPipeline(file);
+      _grayscaleFile = processed.grayscaleFile;
+      _thresholdFile = processed.thresholdFile;
       _processingStep = 'Menjalankan OCR...';
       notifyListeners();
 
