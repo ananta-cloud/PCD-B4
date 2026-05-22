@@ -5,13 +5,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:image_picker/image_picker.dart';
 import '../core/app_colors.dart';
 import '../core/app_text_styles.dart';
-import '../models/receipt.dart';
-import '../repositories/mock_receipt_repository.dart';
-import '../services/image_processing_service.dart';
-import '../services/ocr_service.dart';
-
-enum _ScanPhase { idle, processing, result }
-enum _ImageView { original, grayscale, threshold }
+import '../controllers/scan_controller.dart';
 
 class ScanScreen extends StatefulWidget {
   const ScanScreen({super.key});
@@ -22,17 +16,10 @@ class ScanScreen extends StatefulWidget {
 class _ScanScreenState extends State<ScanScreen> with TickerProviderStateMixin {
   final _picker = ImagePicker();
 
-  _ScanPhase _phase = _ScanPhase.idle;
-  _ImageView _imageView = _ImageView.original;
-  String _processingStep = '';
+  // ── Controller (state + logika bisnis) ──────────────────────────────────
+  late final ScanController _ctrl;
 
-  File? _originalFile;
-  File? _grayscaleFile;
-  File? _thresholdFile;
-  ParsedReceipt? _ocrResult;
-
-  bool _isSaving = false;
-
+  // ── Animasi (tetap di View karena butuh TickerProvider) ─────────────────
   late final AnimationController _pulseCtrl;
   late final Animation<double> _pulseAnim;
   late final AnimationController _resultCtrl;
@@ -41,6 +28,9 @@ class _ScanScreenState extends State<ScanScreen> with TickerProviderStateMixin {
   @override
   void initState() {
     super.initState();
+    _ctrl = ScanController();
+    _ctrl.addListener(_onControllerChanged);
+
     _pulseCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 1200))..repeat(reverse: true);
     _pulseAnim = Tween<double>(begin: 0.4, end: 1.0).animate(CurvedAnimation(parent: _pulseCtrl, curve: Curves.easeInOut));
     _resultCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 600));
@@ -49,89 +39,56 @@ class _ScanScreenState extends State<ScanScreen> with TickerProviderStateMixin {
 
   @override
   void dispose() {
+    _ctrl.removeListener(_onControllerChanged);
+    _ctrl.dispose();
     _pulseCtrl.dispose();
     _resultCtrl.dispose();
     super.dispose();
   }
 
-  // ── Pick image ──────────────────────────────────────────────────────────
+  /// Rebuild UI saat controller state berubah
+  void _onControllerChanged() {
+    if (mounted) setState(() {});
+  }
+
+  // ── View Actions (UI side-effects only) ─────────────────────────────────
   Future<void> _pickImage(ImageSource source) async {
     final picked = await _picker.pickImage(source: source, maxWidth: 1200, imageQuality: 85);
     if (picked == null || !mounted) return;
-    _processImage(File(picked.path));
-  }
-
-  // ── Processing pipeline ─────────────────────────────────────────────────
-  Future<void> _processImage(File file) async {
-    setState(() { _phase = _ScanPhase.processing; _originalFile = file; _processingStep = 'Konversi grayscale...'; });
-
     try {
-      // Step 1: Grayscale
-      final grayFile = await ImageProcessingService.convertToGrayscale(file);
+      await _ctrl.processImage(File(picked.path));
       if (!mounted) return;
-      setState(() { _grayscaleFile = grayFile; _processingStep = 'Binary thresholding...'; });
-
-      // Step 2: Threshold
-      final threshFile = await ImageProcessingService.applyThreshold(grayFile);
-      if (!mounted) return;
-      setState(() { _thresholdFile = threshFile; _processingStep = 'Menjalankan OCR...'; });
-
-      // Step 3: OCR (use original image for best accuracy)
-      final result = await OcrService.processImage(file);
-      if (!mounted) return;
-
-      setState(() { _ocrResult = result; _phase = _ScanPhase.result; _imageView = _ImageView.original; });
       _resultCtrl.forward(from: 0);
       HapticFeedback.mediumImpact();
     } catch (e) {
       if (!mounted) return;
       _showError('Gagal memproses gambar: $e');
-      setState(() => _phase = _ScanPhase.idle);
     }
   }
 
-  // ── Save receipt ────────────────────────────────────────────────────────
-  void _saveReceipt() async {
-    if (_isSaving || _ocrResult == null) return;
-    setState(() => _isSaving = true);
-    await Future.delayed(const Duration(milliseconds: 300));
+  void _onSave() async {
+    final success = await _ctrl.saveReceipt();
     if (!mounted) return;
-
-    MockReceiptRepository.addReceipt(Receipt(
-      id: DateTime.now().millisecondsSinceEpoch.toString(),
-      userId: 'user_001',
-      totalAmount: _ocrResult!.total,
-      confidenceScore: _ocrResult!.confidence,
-      scannedAt: DateTime.now(),
-      merchantName: 'Scanned Receipt',
-    ));
-    HapticFeedback.heavyImpact();
-
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Row(children: [
-        const Icon(Icons.check_circle, color: AppColors.secondary),
-        const SizedBox(width: 8),
-        Text('Struk tersimpan!', style: GoogleFonts.inter(color: AppColors.onSurface)),
-      ]),
-      backgroundColor: AppColors.surfaceContainerHigh,
-      behavior: SnackBarBehavior.floating,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-    ));
-
-    setState(() { _isSaving = false; });
-    _resetScan();
+    if (success) {
+      HapticFeedback.heavyImpact();
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Row(children: [
+          const Icon(Icons.check_circle, color: AppColors.secondary),
+          const SizedBox(width: 8),
+          Text('Struk tersimpan!', style: GoogleFonts.inter(color: AppColors.onSurface)),
+        ]),
+        backgroundColor: AppColors.surfaceContainerHigh,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      ));
+      _resultCtrl.reset();
+      _ctrl.resetScan();
+    }
   }
 
-  void _resetScan() {
+  void _onReset() {
     _resultCtrl.reset();
-    setState(() {
-      _phase = _ScanPhase.idle;
-      _originalFile = null;
-      _grayscaleFile = null;
-      _thresholdFile = null;
-      _ocrResult = null;
-      _imageView = _ImageView.original;
-    });
+    _ctrl.resetScan();
   }
 
   void _showError(String msg) {
@@ -141,23 +98,6 @@ class _ScanScreenState extends State<ScanScreen> with TickerProviderStateMixin {
       behavior: SnackBarBehavior.floating,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
     ));
-  }
-
-  // ── Helpers ─────────────────────────────────────────────────────────────
-  bool get _isDetected => _phase == _ScanPhase.result && (_ocrResult?.confidence ?? 0) > 0.75;
-  bool get _hasItems => _ocrResult != null && _ocrResult!.items.isNotEmpty;
-
-  File? get _displayedImage {
-    return switch (_imageView) {
-      _ImageView.original => _originalFile,
-      _ImageView.grayscale => _grayscaleFile,
-      _ImageView.threshold => _thresholdFile,
-    };
-  }
-
-  String _formatAmount(double amount) {
-    final f = amount.toStringAsFixed(0).replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (m) => '.');
-    return 'Rp $f';
   }
 
   // ── Build ───────────────────────────────────────────────────────────────
@@ -171,8 +111,8 @@ class _ScanScreenState extends State<ScanScreen> with TickerProviderStateMixin {
           // Background
           AnimatedContainer(
             duration: const Duration(milliseconds: 800),
-            color: _isDetected ? const Color(0xFF001A0A) : const Color(0xFF080A12),
-            child: CustomPaint(painter: _GridPainter(isDetected: _isDetected)),
+            color: _ctrl.isDetected ? const Color(0xFF001A0A) : const Color(0xFF080A12),
+            child: CustomPaint(painter: _GridPainter(isDetected: _ctrl.isDetected)),
           ),
           // Gradient overlay
           Container(
@@ -196,7 +136,7 @@ class _ScanScreenState extends State<ScanScreen> with TickerProviderStateMixin {
             child: _buildImageArea(),
           ),
           // Image view tabs (result only)
-          if (_phase == _ScanPhase.result)
+          if (_ctrl.phase == ScanPhase.result)
             Positioned(
               left: 36, right: 36, bottom: 230,
               child: _buildImageTabs(),
@@ -228,20 +168,20 @@ class _ScanScreenState extends State<ScanScreen> with TickerProviderStateMixin {
     final Color color;
     final IconData icon;
 
-    switch (_phase) {
-      case _ScanPhase.idle:
+    switch (_ctrl.phase) {
+      case ScanPhase.idle:
         label = 'SIAP MEMINDAI';
         color = AppColors.primary;
         icon = Icons.camera_alt_outlined;
-      case _ScanPhase.processing:
+      case ScanPhase.processing:
         label = 'MEMPROSES...';
         color = AppColors.syncStatusPending;
         icon = Icons.hourglass_top_rounded;
-      case _ScanPhase.result:
-        final conf = (_ocrResult?.confidence ?? 0) * 100;
-        label = '${conf.toStringAsFixed(0)}% CONFIDENCE — ${_isDetected ? "VALID" : "LOW"}';
-        color = _isDetected ? AppColors.successGlint : AppColors.error;
-        icon = _isDetected ? Icons.check_circle_outline : Icons.warning_amber_rounded;
+      case ScanPhase.result:
+        final conf = (_ctrl.ocrResult?.confidence ?? 0) * 100;
+        label = '${conf.toStringAsFixed(0)}% CONFIDENCE — ${_ctrl.isDetected ? "VALID" : "LOW"}';
+        color = _ctrl.isDetected ? AppColors.successGlint : AppColors.error;
+        icon = _ctrl.isDetected ? Icons.check_circle_outline : Icons.warning_amber_rounded;
     }
 
     return AnimatedContainer(
@@ -262,12 +202,12 @@ class _ScanScreenState extends State<ScanScreen> with TickerProviderStateMixin {
 
   // ── Image Area ──────────────────────────────────────────────────────────
   Widget _buildImageArea() {
-    switch (_phase) {
-      case _ScanPhase.idle:
+    switch (_ctrl.phase) {
+      case ScanPhase.idle:
         return _buildIdleGuide();
-      case _ScanPhase.processing:
+      case ScanPhase.processing:
         return _buildProcessingView();
-      case _ScanPhase.result:
+      case ScanPhase.result:
         return _buildResultImage();
     }
   }
@@ -295,13 +235,11 @@ class _ScanScreenState extends State<ScanScreen> with TickerProviderStateMixin {
 
   Widget _buildProcessingView() {
     return Stack(children: [
-      // Show original image
-      if (_originalFile != null)
+      if (_ctrl.originalFile != null)
         ClipRRect(
           borderRadius: BorderRadius.circular(8),
-          child: Image.file(_originalFile!, fit: BoxFit.cover, width: double.infinity, height: double.infinity),
+          child: Image.file(_ctrl.originalFile!, fit: BoxFit.cover, width: double.infinity, height: double.infinity),
         ),
-      // Processing overlay
       Container(
         decoration: BoxDecoration(
           color: Colors.black.withValues(alpha: 0.7),
@@ -311,7 +249,7 @@ class _ScanScreenState extends State<ScanScreen> with TickerProviderStateMixin {
           child: Column(mainAxisSize: MainAxisSize.min, children: [
             const SizedBox(width: 40, height: 40, child: CircularProgressIndicator(strokeWidth: 3, color: AppColors.primary)),
             const SizedBox(height: 16),
-            Text(_processingStep, style: AppTextStyles.label(color: AppColors.primary)),
+            Text(_ctrl.processingStep, style: AppTextStyles.label(color: AppColors.primary)),
           ]),
         ),
       ),
@@ -319,7 +257,7 @@ class _ScanScreenState extends State<ScanScreen> with TickerProviderStateMixin {
   }
 
   Widget _buildResultImage() {
-    final file = _displayedImage;
+    final file = _ctrl.displayedImage;
     if (file == null) return const SizedBox();
 
     return AnimatedBuilder(
@@ -330,10 +268,10 @@ class _ScanScreenState extends State<ScanScreen> with TickerProviderStateMixin {
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(8),
             border: Border.all(
-              color: _isDetected ? AppColors.successGlint : AppColors.error,
+              color: _ctrl.isDetected ? AppColors.successGlint : AppColors.error,
               width: 2,
             ),
-            boxShadow: _isDetected ? [
+            boxShadow: _ctrl.isDetected ? [
               BoxShadow(color: AppColors.successGlint.withValues(alpha: 0.3), blurRadius: 16),
             ] : null,
           ),
@@ -349,19 +287,19 @@ class _ScanScreenState extends State<ScanScreen> with TickerProviderStateMixin {
   // ── Image Tabs ──────────────────────────────────────────────────────────
   Widget _buildImageTabs() {
     return Row(children: [
-      _tabButton('Original', _ImageView.original),
+      _tabButton('Original', ImageViewType.original),
       const SizedBox(width: 6),
-      _tabButton('Grayscale', _ImageView.grayscale),
+      _tabButton('Grayscale', ImageViewType.grayscale),
       const SizedBox(width: 6),
-      _tabButton('Threshold', _ImageView.threshold),
+      _tabButton('Threshold', ImageViewType.threshold),
     ]);
   }
 
-  Widget _tabButton(String label, _ImageView view) {
-    final active = _imageView == view;
+  Widget _tabButton(String label, ImageViewType view) {
+    final active = _ctrl.imageView == view;
     return Expanded(
       child: GestureDetector(
-        onTap: () => setState(() => _imageView = view),
+        onTap: () => _ctrl.setImageView(view),
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 200),
           padding: const EdgeInsets.symmetric(vertical: 8),
@@ -385,11 +323,11 @@ class _ScanScreenState extends State<ScanScreen> with TickerProviderStateMixin {
       decoration: BoxDecoration(
         color: AppColors.surfaceContainerHigh.withValues(alpha: 0.95),
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: _isDetected ? AppColors.successGlint.withValues(alpha: 0.3) : AppColors.outlineVariant),
+        border: Border.all(color: _ctrl.isDetected ? AppColors.successGlint.withValues(alpha: 0.3) : AppColors.outlineVariant),
       ),
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
-      child: _phase == _ScanPhase.idle ? _buildIdleActions() :
-             _phase == _ScanPhase.processing ? _buildProcessingInfo() :
+      child: _ctrl.phase == ScanPhase.idle ? _buildIdleActions() :
+             _ctrl.phase == ScanPhase.processing ? _buildProcessingInfo() :
              _buildResultPanel(),
     );
   }
@@ -428,23 +366,21 @@ class _ScanScreenState extends State<ScanScreen> with TickerProviderStateMixin {
     return Row(mainAxisSize: MainAxisSize.min, children: [
       const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.primary)),
       const SizedBox(width: 12),
-      Expanded(child: Text(_processingStep, style: AppTextStyles.bodyMd(color: AppColors.onSurface))),
+      Expanded(child: Text(_ctrl.processingStep, style: AppTextStyles.bodyMd(color: AppColors.onSurface))),
     ]);
   }
 
   Widget _buildResultPanel() {
-    final result = _ocrResult;
+    final result = _ctrl.ocrResult;
     if (result == null) return const SizedBox();
 
     return ConstrainedBox(
       constraints: const BoxConstraints(maxHeight: 360),
       child: Column(mainAxisSize: MainAxisSize.min, children: [
-        // Scrollable receipt content
         Flexible(
           child: SingleChildScrollView(
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              // ── Items ──
-              if (_hasItems) ...[
+              if (_ctrl.hasItems) ...[
                 Text('ITEM BELANJA', style: AppTextStyles.labelCaps()),
                 const SizedBox(height: 8),
                 ...result.items.map((item) => Padding(
@@ -454,33 +390,29 @@ class _ScanScreenState extends State<ScanScreen> with TickerProviderStateMixin {
                     const SizedBox(height: 2),
                     Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
                       Text(
-                        '${item.qty} x ${_formatAmount(item.unitPrice)}',
+                        '${item.qty} x ${_ctrl.formatAmount(item.unitPrice)}',
                         style: AppTextStyles.label(color: AppColors.onSurfaceVariant),
                       ),
-                      Text(_formatAmount(item.totalPrice), style: AppTextStyles.label(color: AppColors.onSurface)),
+                      Text(_ctrl.formatAmount(item.totalPrice), style: AppTextStyles.label(color: AppColors.onSurface)),
                     ]),
                   ]),
                 )),
                 Divider(color: AppColors.outlineVariant.withValues(alpha: 0.5), height: 16),
               ],
-              // ── Subtotal ──
               if (result.subtotal > 0)
-                _summaryRow('Subtotal', _formatAmount(result.subtotal)),
-              // ── Total ──
+                _summaryRow('Subtotal', _ctrl.formatAmount(result.subtotal)),
               _summaryRow(
                 'TOTAL',
-                result.isValid ? _formatAmount(result.total) : 'Tidak ditemukan',
+                result.isValid ? _ctrl.formatAmount(result.total) : 'Tidak ditemukan',
                 isBold: true,
                 color: result.isValid ? AppColors.onSurface : AppColors.error,
               ),
-              // ── Cash & Change ──
               if (result.hasCashPayment) ...[
                 Divider(color: AppColors.outlineVariant.withValues(alpha: 0.5), height: 16),
-                _summaryRow('Tunai', _formatAmount(result.cash!)),
+                _summaryRow('Tunai', _ctrl.formatAmount(result.cash!)),
                 if (result.change != null && result.change! > 0)
-                  _summaryRow('Kembali', _formatAmount(result.change!)),
+                  _summaryRow('Kembali', _ctrl.formatAmount(result.change!)),
               ],
-              // ── OCR raw text link ──
               if (result.rawText.isNotEmpty) ...[
                 const SizedBox(height: 10),
                 GestureDetector(
@@ -492,7 +424,7 @@ class _ScanScreenState extends State<ScanScreen> with TickerProviderStateMixin {
                   ]),
                 ),
               ],
-              if (!_hasItems && !result.isValid) ...[
+              if (!_ctrl.hasItems && !result.isValid) ...[
                 const SizedBox(height: 8),
                 Text('Tidak ada item terdeteksi.\nCoba foto ulang dengan pencahayaan lebih baik.',
                   style: AppTextStyles.bodyMd(color: AppColors.onSurfaceVariant),
@@ -501,16 +433,15 @@ class _ScanScreenState extends State<ScanScreen> with TickerProviderStateMixin {
             ]),
           ),
         ),
-        // ── Action buttons ──
         const SizedBox(height: 14),
         Row(children: [
           Expanded(
             child: ElevatedButton.icon(
-              onPressed: _isSaving ? null : _saveReceipt,
-              icon: _isSaving
+              onPressed: _ctrl.isSaving ? null : _onSave,
+              icon: _ctrl.isSaving
                   ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.onSecondaryContainer))
                   : const Icon(Icons.save_alt_rounded, size: 18),
-              label: Text(_isSaving ? 'Menyimpan...' : 'Simpan', style: GoogleFonts.spaceGrotesk(fontWeight: FontWeight.w600, fontSize: 14)),
+              label: Text(_ctrl.isSaving ? 'Menyimpan...' : 'Simpan', style: GoogleFonts.spaceGrotesk(fontWeight: FontWeight.w600, fontSize: 14)),
               style: ElevatedButton.styleFrom(
                 backgroundColor: AppColors.secondaryContainer,
                 foregroundColor: AppColors.onSecondaryContainer,
@@ -523,7 +454,7 @@ class _ScanScreenState extends State<ScanScreen> with TickerProviderStateMixin {
           const SizedBox(width: 10),
           Expanded(
             child: OutlinedButton.icon(
-              onPressed: _resetScan,
+              onPressed: _onReset,
               icon: const Icon(Icons.refresh_rounded, size: 18),
               label: Text('Scan Lagi', style: GoogleFonts.spaceGrotesk(fontWeight: FontWeight.w600, fontSize: 14)),
               style: OutlinedButton.styleFrom(

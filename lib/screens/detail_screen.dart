@@ -3,7 +3,7 @@ import 'package:google_fonts/google_fonts.dart';
 import '../core/app_colors.dart';
 import '../core/app_text_styles.dart';
 import '../models/receipt.dart';
-import '../repositories/mock_receipt_repository.dart';
+import '../controllers/detail_controller.dart';
 
 class DetailScreen extends StatefulWidget {
   final Receipt receipt;
@@ -13,12 +13,17 @@ class DetailScreen extends StatefulWidget {
 }
 
 class _DetailScreenState extends State<DetailScreen> with SingleTickerProviderStateMixin {
+  // ── Controller ──────────────────────────────────────────────────────────
+  late final DetailController _ctrl;
+
+  // ── Animasi (tetap di View) ─────────────────────────────────────────────
   late final AnimationController _entryCtrl;
   late final Animation<double> _fadeAnim;
 
   @override
   void initState() {
     super.initState();
+    _ctrl = DetailController(receipt: widget.receipt);
     _entryCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 500));
     _fadeAnim = CurvedAnimation(parent: _entryCtrl, curve: Curves.easeOut);
     _entryCtrl.forward();
@@ -26,11 +31,13 @@ class _DetailScreenState extends State<DetailScreen> with SingleTickerProviderSt
 
   @override
   void dispose() {
+    _ctrl.dispose();
     _entryCtrl.dispose();
     super.dispose();
   }
 
-  void _delete() async {
+  // ── View Actions (UI side-effects) ──────────────────────────────────────
+  void _onDelete() async {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
@@ -52,7 +59,7 @@ class _DetailScreenState extends State<DetailScreen> with SingleTickerProviderSt
       ),
     );
     if (confirmed == true && mounted) {
-      MockReceiptRepository.deleteReceipt(widget.receipt.id);
+      _ctrl.deleteReceipt();
       Navigator.pop(context);
     }
   }
@@ -71,10 +78,8 @@ class _DetailScreenState extends State<DetailScreen> with SingleTickerProviderSt
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(16),
           child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-            // Receipt image preview card
             _ReceiptImageCard(confidence: r.confidenceScore),
             const SizedBox(height: 16),
-            // Detail card
             _DetailCard(receipt: r),
             const SizedBox(height: 80),
           ]),
@@ -100,7 +105,7 @@ class _DetailScreenState extends State<DetailScreen> with SingleTickerProviderSt
             const SizedBox(width: 12),
             Expanded(
               child: ElevatedButton.icon(
-                onPressed: _delete,
+                onPressed: _onDelete,
                 icon: const Icon(Icons.delete_outline, size: 18),
                 label: const Text('Delete'),
                 style: ElevatedButton.styleFrom(
@@ -134,7 +139,6 @@ class _ReceiptImageCard extends StatelessWidget {
       ),
       clipBehavior: Clip.hardEdge,
       child: Stack(children: [
-        // Simulated receipt texture
         Container(
           decoration: const BoxDecoration(
             gradient: LinearGradient(
@@ -145,7 +149,6 @@ class _ReceiptImageCard extends StatelessWidget {
           ),
           child: CustomPaint(painter: _ReceiptTexturePainter()),
         ),
-        // Green bounding box overlay
         Positioned(
           left: 40, top: 20, right: 40, bottom: 60,
           child: Container(
@@ -155,7 +158,6 @@ class _ReceiptImageCard extends StatelessWidget {
             ),
           ),
         ),
-        // Confidence badge
         Positioned(
           top: 16, right: 16,
           child: Container(

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../core/app_colors.dart';
 import '../core/app_text_styles.dart';
 import '../widgets/auth_widgets.dart';
+import '../controllers/auth_controller.dart';
 import 'register_screen.dart';
 import '../main.dart';
 
@@ -16,8 +17,11 @@ class _LoginScreenState extends State<LoginScreen>
   final _emailCtrl = TextEditingController();
   final _passwordCtrl = TextEditingController();
   bool _obscurePassword = true;
-  bool _isLoading = false;
 
+  // ── Controller ──────────────────────────────────────────────────────────
+  late final AuthController _authCtrl;
+
+  // ── Animasi (tetap di View) ─────────────────────────────────────────────
   late final AnimationController _fadeCtrl;
   late final Animation<double> _fadeAnim;
   late final Animation<Offset> _slideAnim;
@@ -25,6 +29,9 @@ class _LoginScreenState extends State<LoginScreen>
   @override
   void initState() {
     super.initState();
+    _authCtrl = AuthController();
+    _authCtrl.addListener(_onControllerChanged);
+
     _fadeCtrl = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 800),
@@ -36,18 +43,25 @@ class _LoginScreenState extends State<LoginScreen>
 
   @override
   void dispose() {
+    _authCtrl.removeListener(_onControllerChanged);
+    _authCtrl.dispose();
     _fadeCtrl.dispose();
     _emailCtrl.dispose();
     _passwordCtrl.dispose();
     super.dispose();
   }
 
-  Future<void> _authenticate() async {
-    if (_isLoading) return;
-    setState(() => _isLoading = true);
-    await Future.delayed(const Duration(milliseconds: 1200));
-    if (!mounted) return;
-    setState(() => _isLoading = false);
+  void _onControllerChanged() {
+    if (mounted) setState(() {});
+  }
+
+  // ── View Actions ────────────────────────────────────────────────────────
+  Future<void> _onAuthenticate() async {
+    final success = await _authCtrl.authenticate(
+      _emailCtrl.text,
+      _passwordCtrl.text,
+    );
+    if (!mounted || !success) return;
     Navigator.of(context).pushReplacement(
       PageRouteBuilder(
         pageBuilder: (context, animation, secondaryAnimation) => const MainShell(),
@@ -65,7 +79,6 @@ class _LoginScreenState extends State<LoginScreen>
       body: SafeArea(
         child: Stack(
           children: [
-            // Grid background
             const Positioned.fill(child: AuthGridBackground()),
             FadeTransition(
               opacity: _fadeAnim,
@@ -83,7 +96,6 @@ class _LoginScreenState extends State<LoginScreen>
                       const SizedBox(height: 8),
                       Text('Intelligent edge extraction.', style: AppTextStyles.bodyMd()),
                       const SizedBox(height: 48),
-                      // Form card
                       Container(
                         decoration: BoxDecoration(
                           color: AppColors.surfaceContainerHigh,
@@ -144,13 +156,13 @@ class _LoginScreenState extends State<LoginScreen>
                             const SizedBox(height: 24),
                             AuthPrimaryButton(
                               label: 'Authenticate',
-                              isLoading: _isLoading,
-                              onTap: _authenticate,
+                              isLoading: _authCtrl.isLoading,
+                              onTap: _onAuthenticate,
                             ),
                             const SizedBox(height: 20),
                             AuthOrDivider(),
                             const SizedBox(height: 20),
-                            AuthBiometricButton(onTap: _authenticate),
+                            AuthBiometricButton(onTap: _onAuthenticate),
                           ],
                         ),
                       ),

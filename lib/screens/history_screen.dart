@@ -3,7 +3,7 @@ import 'package:google_fonts/google_fonts.dart';
 import '../core/app_colors.dart';
 import '../core/app_text_styles.dart';
 import '../models/receipt.dart';
-import '../repositories/mock_receipt_repository.dart';
+import '../controllers/history_controller.dart';
 import 'detail_screen.dart';
 
 class HistoryScreen extends StatefulWidget {
@@ -13,31 +13,30 @@ class HistoryScreen extends StatefulWidget {
 }
 
 class _HistoryScreenState extends State<HistoryScreen> {
-  List<Receipt> _receipts = [];
+  // ── Controller ──────────────────────────────────────────────────────────
+  late final HistoryController _ctrl;
 
   @override
   void initState() {
     super.initState();
-    _load();
+    _ctrl = HistoryController();
+    _ctrl.addListener(_onControllerChanged);
+    _ctrl.loadReceipts();
   }
 
-  void _load() => setState(() => _receipts = MockReceiptRepository.getAll());
+  @override
+  void dispose() {
+    _ctrl.removeListener(_onControllerChanged);
+    _ctrl.dispose();
+    super.dispose();
+  }
 
-  // Group by day
-  Map<String, List<Receipt>> get _grouped {
-    final now = DateTime.now();
-    final Map<String, List<Receipt>> g = {};
-    for (final r in _receipts) {
-      final diff = now.difference(r.scannedAt).inDays;
-      final label = diff == 0 ? 'Today' : diff == 1 ? 'Yesterday' : '$diff Days Ago';
-      g.putIfAbsent(label, () => []).add(r);
-    }
-    return g;
+  void _onControllerChanged() {
+    if (mounted) setState(() {});
   }
 
   @override
   Widget build(BuildContext context) {
-    final pending = MockReceiptRepository.pendingCount;
     return Scaffold(
       appBar: AppBar(
         title: const Text('ReceiptSync'),
@@ -45,18 +44,18 @@ class _HistoryScreenState extends State<HistoryScreen> {
         leading: _iconBtn(Icons.settings_outlined, () {}),
       ),
       body: RefreshIndicator(
-        onRefresh: () async => _load(),
+        onRefresh: () async => _ctrl.loadReceipts(),
         color: AppColors.primary,
         child: ListView(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
           children: [
             // Pending sync banner
-            if (pending > 0) ...[
-              _SyncBanner(pendingCount: pending),
+            if (_ctrl.pendingCount > 0) ...[
+              _SyncBanner(pendingCount: _ctrl.pendingCount),
               const SizedBox(height: 20),
             ],
             // Grouped list
-            ..._grouped.entries.map((entry) => Column(
+            ..._ctrl.grouped.entries.map((entry) => Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(entry.key, style: AppTextStyles.headlineMd()),
@@ -67,7 +66,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
                     receipt: r,
                     onTap: () async {
                       await Navigator.push(context, MaterialPageRoute(builder: (_) => DetailScreen(receipt: r)));
-                      _load();
+                      _ctrl.loadReceipts(); // Reload setelah kembali dari detail
                     },
                   ),
                 )),

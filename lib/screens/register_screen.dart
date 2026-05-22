@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../core/app_colors.dart';
 import '../core/app_text_styles.dart';
 import '../widgets/auth_widgets.dart';
+import '../controllers/auth_controller.dart';
 import 'login_screen.dart';
 import '../main.dart';
 
@@ -17,8 +18,11 @@ class _RegisterScreenState extends State<RegisterScreen>
   final _emailCtrl = TextEditingController();
   final _passwordCtrl = TextEditingController();
   bool _obscurePassword = true;
-  bool _isLoading = false;
 
+  // ── Controller ──────────────────────────────────────────────────────────
+  late final AuthController _authCtrl;
+
+  // ── Animasi (tetap di View) ─────────────────────────────────────────────
   late final AnimationController _fadeCtrl;
   late final Animation<double> _fadeAnim;
   late final Animation<Offset> _slideAnim;
@@ -26,6 +30,9 @@ class _RegisterScreenState extends State<RegisterScreen>
   @override
   void initState() {
     super.initState();
+    _authCtrl = AuthController();
+    _authCtrl.addListener(_onControllerChanged);
+
     _fadeCtrl = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 800),
@@ -37,6 +44,8 @@ class _RegisterScreenState extends State<RegisterScreen>
 
   @override
   void dispose() {
+    _authCtrl.removeListener(_onControllerChanged);
+    _authCtrl.dispose();
     _fadeCtrl.dispose();
     _nameCtrl.dispose();
     _emailCtrl.dispose();
@@ -44,12 +53,18 @@ class _RegisterScreenState extends State<RegisterScreen>
     super.dispose();
   }
 
-  Future<void> _signUp() async {
-    if (_isLoading) return;
-    setState(() => _isLoading = true);
-    await Future.delayed(const Duration(milliseconds: 1200));
-    if (!mounted) return;
-    setState(() => _isLoading = false);
+  void _onControllerChanged() {
+    if (mounted) setState(() {});
+  }
+
+  // ── View Actions ────────────────────────────────────────────────────────
+  Future<void> _onSignUp() async {
+    final success = await _authCtrl.signUp(
+      _nameCtrl.text,
+      _emailCtrl.text,
+      _passwordCtrl.text,
+    );
+    if (!mounted || !success) return;
     Navigator.of(context).pushReplacement(
       PageRouteBuilder(
         pageBuilder: (context, animation, secondaryAnimation) => const MainShell(),
@@ -75,7 +90,6 @@ class _RegisterScreenState extends State<RegisterScreen>
                 crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
                   const SizedBox(height: 40),
-                  // Gradient top accent bar
                   AuthGradientAccent(),
                   const SizedBox(height: 32),
                   AuthAppLogo(),
@@ -92,7 +106,6 @@ class _RegisterScreenState extends State<RegisterScreen>
                     textAlign: TextAlign.center,
                   ),
                   const SizedBox(height: 36),
-                  // Full Name
                   _Label('Full Name'),
                   const SizedBox(height: 8),
                   AuthTextField(
@@ -101,7 +114,6 @@ class _RegisterScreenState extends State<RegisterScreen>
                     prefixIcon: Icons.person_outline_rounded,
                   ),
                   const SizedBox(height: 18),
-                  // Work Email
                   _Label('Work Email'),
                   const SizedBox(height: 8),
                   AuthTextField(
@@ -111,7 +123,6 @@ class _RegisterScreenState extends State<RegisterScreen>
                     keyboardType: TextInputType.emailAddress,
                   ),
                   const SizedBox(height: 18),
-                  // Password
                   _Label('Password'),
                   const SizedBox(height: 8),
                   AuthTextField(
@@ -134,13 +145,13 @@ class _RegisterScreenState extends State<RegisterScreen>
                   const SizedBox(height: 28),
                   AuthPrimaryButton(
                     label: 'SIGN UP NOW',
-                    isLoading: _isLoading,
-                    onTap: _signUp,
+                    isLoading: _authCtrl.isLoading,
+                    onTap: _onSignUp,
                   ),
                   const SizedBox(height: 24),
                   AuthOrDivider(),
                   const SizedBox(height: 24),
-                  AuthGoogleButton(onTap: _signUp),
+                  AuthGoogleButton(onTap: _onSignUp),
                   const SizedBox(height: 28),
                   Row(
                     mainAxisAlignment: MainAxisAlignment.center,
