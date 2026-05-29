@@ -7,6 +7,7 @@ class Receipt {
   final DateTime scannedAt;
   bool isSynced;
   final String? merchantName;
+  final String? imagePath;
 
   Receipt({
     required this.id,
@@ -16,6 +17,7 @@ class Receipt {
     required this.scannedAt,
     this.isSynced = false,
     this.merchantName,
+    this.imagePath,
   });
 
   String get formattedAmount {
@@ -42,4 +44,27 @@ class Receipt {
 
   String get confidencePercent =>
       '${(confidenceScore * 100).toStringAsFixed(0)}%';
+
+  /// Buat copy dengan field yang diubah
+  Receipt copyWith({
+    String? id,
+    String? userId,
+    double? totalAmount,
+    double? confidenceScore,
+    DateTime? scannedAt,
+    bool? isSynced,
+    String? merchantName,
+    String? imagePath,
+  }) {
+    return Receipt(
+      id: id ?? this.id,
+      userId: userId ?? this.userId,
+      totalAmount: totalAmount ?? this.totalAmount,
+      confidenceScore: confidenceScore ?? this.confidenceScore,
+      scannedAt: scannedAt ?? this.scannedAt,
+      isSynced: isSynced ?? this.isSynced,
+      merchantName: merchantName ?? this.merchantName,
+      imagePath: imagePath ?? this.imagePath,
+    );
+  }
 }

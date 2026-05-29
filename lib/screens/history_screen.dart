@@ -3,8 +3,8 @@ import 'package:google_fonts/google_fonts.dart';
 import '../core/app_colors.dart';
 import '../core/app_text_styles.dart';
 import '../models/receipt.dart';
-import '../services/mongo_service.dart';
 import 'detail_screen.dart';
+import '../repositories/receipt_repository.dart';
 
 class HistoryScreen extends StatefulWidget {
   const HistoryScreen({super.key});
@@ -15,7 +15,7 @@ class HistoryScreen extends StatefulWidget {
 
 class _HistoryScreenState extends State<HistoryScreen> {
   // Kita menggunakan Future agar bisa dipakai oleh FutureBuilder
-  late Future<List<Map<String, dynamic>>> _receiptsFuture;
+  late Future<List<Receipt>> _receiptsFuture;
 
   @override
   void initState() {
@@ -25,28 +25,17 @@ class _HistoryScreenState extends State<HistoryScreen> {
 
   void _load() {
     setState(() {
-      _receiptsFuture = MongoService.getReceiptHistory();
+      _receiptsFuture = Future.value(ReceiptRepository.getAll());
     });
   }
 
   // Fungsi untuk mengelompokkan data berdasarkan hari
-  Map<String, List<Map<String, dynamic>>> _groupData(
-    List<Map<String, dynamic>> rawData,
-  ) {
+  Map<String, List<Receipt>> _groupData(List<Receipt> receipts) {
     final now = DateTime.now();
-    final Map<String, List<Map<String, dynamic>>> g = {};
+    final Map<String, List<Receipt>> g = {};
 
-    for (final r in rawData) {
-      // Pastikan tipe data tanggal dari MongoDB di-handle dengan benar.
-      // Jika di MongoDB disimpen sebagai string, parse dulu: DateTime.parse(r['scanDate'])
-      // Jika disimpan sebagai Date di MongoDB, mungkin akan menjadi DateTime di Dart.
-      DateTime scannedAt = r['scanDate'] is DateTime
-          ? r['scanDate']
-          : (r['scanDate'] != null
-                ? DateTime.tryParse(r['scanDate'].toString()) ?? now
-                : now);
-
-      final diff = now.difference(scannedAt).inDays;
+    for (final r in receipts) {
+      final diff = now.difference(r.scannedAt).inDays;
       final label = diff == 0
           ? 'Today'
           : diff == 1
@@ -69,7 +58,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
       body: RefreshIndicator(
         onRefresh: () async => _load(),
         color: AppColors.primary,
-        child: FutureBuilder<List<Map<String, dynamic>>>(
+        child: FutureBuilder<List<Receipt>>(
           future: _receiptsFuture,
           builder: (context, snapshot) {
             if (snapshot.connectionState == ConnectionState.waiting) {
@@ -122,20 +111,23 @@ class _HistoryScreenState extends State<HistoryScreen> {
                     children: [
                       Text(entry.key, style: AppTextStyles.headlineMd()),
                       const SizedBox(height: 12),
-                      ...entry.value.map((r) => Padding(
-                      padding: const EdgeInsets.only(bottom: 10),
-                      child: _ReceiptCard(
-                        receiptData: r,
-                        onTap: () async {
-                          // NAVIGASI KE DETAIL SCREEN DAN PASSING DATA 'r'
-                          await Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) => DetailScreen(receiptData: r),
-                            ),
-                          );
-                        },
-                      ),)),
+                      ...entry.value.map(
+                        (r) => Padding(
+                          padding: const EdgeInsets.only(bottom: 10),
+                          child: _ReceiptCard(
+                            receipt: r,
+                            onTap: () async {
+                              // NAVIGASI KE DETAIL SCREEN DAN PASSING DATA 'r'
+                              await Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) => DetailScreen(receipt: r),
+                                ),
+                              );
+                            },
+                          ),
+                        ),
+                      ),
                       const SizedBox(height: 12),
                     ],
                   ),
@@ -233,20 +225,17 @@ class _SyncBanner extends StatelessWidget {
 }
 
 class _ReceiptCard extends StatelessWidget {
-  // Menerima map data langsung dari MongoDB untuk dirender
-  final Map<String, dynamic> receiptData;
+  // Menerima Receipt object untuk dirender
+  final Receipt receipt;
   final VoidCallback onTap;
 
-  const _ReceiptCard({required this.receiptData, required this.onTap});
+  const _ReceiptCard({required this.receipt, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
-    final merchantName = receiptData['storeName'] ?? "Unknown";
-    final amount = receiptData['totalAmount'] ?? 0;
-
-    final formattedAmount = 'Rp $amount';
-
-    final isSynced = receiptData['isSynced'] ?? true;
+    final merchantName = receipt.merchantName ?? "Unknown";
+    final formattedAmount = receipt.formattedAmount;
+    final isSynced = receipt.isSynced;
 
     return GestureDetector(
       onTap: onTap,
