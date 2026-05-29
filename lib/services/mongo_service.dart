@@ -15,30 +15,40 @@ class MongoService {
   /// Fungsi untuk menghubungkan aplikasi ke MongoDB
   static Future<void> connect() async {
     try {
-      // Pastikan nama variabel di sini sesuai dengan yang ada di file .env Anda 
-      // (misalnya 'MONGO_URL' atau 'MONGO_URI')
       final mongoUri = dotenv.env['MONGO_URL'] ?? dotenv.env['MONGO_URI'];
       
       if (mongoUri == null || mongoUri.isEmpty) {
-        throw Exception("MONGO_URI atau MONGO_URL tidak ditemukan di file .env");
+        log("⚠️ MONGO_URI tidak ditemukan di .env, skip koneksi MongoDB");
+        return;
       }
 
       _db = await Db.create(mongoUri);
       await _db!.open();
       log("✅ Berhasil terkoneksi ke MongoDB!");
     } catch (e) {
-      log("❌ Gagal terkoneksi: $e");
-      rethrow;
+      log("⚠️ Gagal terkoneksi ke MongoDB: $e");
+      _db = null; // Pastikan _db null agar getCollection() tidak crash
     }
   }
 
+  /// Cek apakah koneksi MongoDB aktif
+  static bool get isConnected => _db != null && (_db!.isConnected);
+
   /// Fungsi ini yang sebelumnya hilang (mengambil koleksi dari database)
-  static DbCollection getCollection(String name) => _db!.collection(name);
+  static DbCollection getCollection(String name) {
+    if (_db == null || !_db!.isConnected) {
+      throw Exception("Tidak ada koneksi ke MongoDB. Pastikan internet tersambung.");
+    }
+    return _db!.collection(name);
+  }
 
   // ==================== AUTHENTICATION ====================
 
   static Future<bool> registerUser(String email, String password) async {
     try {
+      // Coba reconnect kalau belum tersambung
+      if (!isConnected) await connect();
+
       var collection = getCollection(usersCollection);
       
       // Cek apakah email sudah ada
@@ -68,6 +78,9 @@ class MongoService {
 
   static Future<bool> loginUser(String email, String password) async {
     try {
+      // Coba reconnect kalau belum tersambung
+      if (!isConnected) await connect();
+
       var collection = getCollection(usersCollection);
       var user = await collection.findOne(where.eq('email', email));
 

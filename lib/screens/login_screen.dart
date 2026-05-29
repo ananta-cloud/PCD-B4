@@ -4,7 +4,8 @@ import '../core/app_text_styles.dart';
 import '../widgets/auth_widgets.dart';
 import 'register_screen.dart';
 import '../main.dart';
-import '../services/mongo_service.dart'; 
+import '../services/mongo_service.dart';
+import '../services/hive_utils.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -64,6 +65,13 @@ class _LoginScreenState extends State<LoginScreen>
       setState(() => _isLoading = false);
 
       if (success) {
+        // Simpan sesi login ke Hive agar persisten
+        await HiveUtils.loginUser(
+          email: email,
+          name: MongoService.currentUserEmail ?? email,
+        );
+
+        if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Login Berhasil!')),
         );

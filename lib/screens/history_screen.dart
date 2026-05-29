@@ -5,6 +5,7 @@ import '../core/app_text_styles.dart';
 import '../models/receipt.dart';
 import 'detail_screen.dart';
 import '../repositories/receipt_repository.dart';
+import '../services/hive_utils.dart';
 
 class HistoryScreen extends StatefulWidget {
   const HistoryScreen({super.key});
@@ -48,7 +49,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final pendingCount = 0;
+    final pendingCount = ReceiptRepository.pendingCount;
 
     return Scaffold(
       appBar: AppBar(
@@ -102,7 +103,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
               children: [
                 if (pendingCount > 0) ...[
-                  _SyncBanner(pendingCount: pendingCount),
+                  _SyncBanner(pendingCount: pendingCount, onSyncDone: _load),
                   const SizedBox(height: 20),
                 ],
                 ...groupedData.entries.map(
@@ -148,9 +149,27 @@ class _HistoryScreenState extends State<HistoryScreen> {
   }
 }
 
-class _SyncBanner extends StatelessWidget {
+class _SyncBanner extends StatefulWidget {
   final int pendingCount;
-  const _SyncBanner({required this.pendingCount});
+  final VoidCallback onSyncDone;
+  const _SyncBanner({required this.pendingCount, required this.onSyncDone});
+
+  @override
+  State<_SyncBanner> createState() => _SyncBannerState();
+}
+
+class _SyncBannerState extends State<_SyncBanner> {
+  bool _isSyncing = false;
+
+  Future<void> _doSync() async {
+    if (_isSyncing) return;
+    setState(() => _isSyncing = true);
+    await HiveUtils.syncPending();
+    if (mounted) {
+      setState(() => _isSyncing = false);
+      widget.onSyncDone();
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -189,7 +208,7 @@ class _SyncBanner extends StatelessWidget {
                 ),
                 const SizedBox(height: 2),
                 Text(
-                  '$pendingCount items pending sync',
+                  '${widget.pendingCount} items pending sync',
                   style: AppTextStyles.label(
                     color: AppColors.syncStatusPending,
                   ),
@@ -199,7 +218,7 @@ class _SyncBanner extends StatelessWidget {
           ),
           const SizedBox(width: 8),
           TextButton(
-            onPressed: () {},
+            onPressed: _isSyncing ? null : _doSync,
             style: TextButton.styleFrom(
               backgroundColor: AppColors.surfaceContainerHighest,
               foregroundColor: AppColors.onSurface,
@@ -208,15 +227,21 @@ class _SyncBanner extends StatelessWidget {
                 borderRadius: BorderRadius.circular(10),
               ),
             ),
-            child: Text(
-              'SYNC\nNOW',
-              textAlign: TextAlign.center,
-              style: GoogleFonts.spaceGrotesk(
-                fontSize: 11,
-                fontWeight: FontWeight.w700,
-                letterSpacing: 0.5,
-              ),
-            ),
+            child: _isSyncing
+                ? const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : Text(
+                    'SYNC\nNOW',
+                    textAlign: TextAlign.center,
+                    style: GoogleFonts.spaceGrotesk(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 0.5,
+                    ),
+                  ),
           ),
         ],
       ),

@@ -3,6 +3,7 @@ import '../models/user.dart';
 import '../repositories/receipt_repository.dart';
 import '../repositories/user_repository.dart';
 import '../repositories/settings_repository.dart';
+import '../services/mongo_service.dart';
 import 'hive_service.dart';
 
 /// Utility class untuk operasi Hive yang sering digunakan
@@ -169,15 +170,34 @@ class HiveUtils {
 
   // ── Database Utils ──────────────────────────────────────────────────────
 
-  /// Sync all pending receipts (call this to trigger sync)
+  /// Sync all pending receipts ke MongoDB (call this when internet is available)
   static Future<int> syncPending() async {
     final pending = ReceiptRepository.getPending();
     if (pending.isEmpty) return 0;
 
-    // In real app, this would call API
-    // For now, just mark as synced
-    await ReceiptRepository.markAllAsSynced();
-    return pending.length;
+    int syncedCount = 0;
+    final syncedIds = <String>[];
+
+    for (final receipt in pending) {
+      try {
+        final success = await MongoService.insertReceipt(
+          receipt.merchantName ?? 'Unknown',
+          receipt.totalAmount,
+        );
+        if (success) {
+          syncedIds.add(receipt.id);
+          syncedCount++;
+        }
+      } catch (_) {
+        // Lewati receipt yang gagal, coba lagi nanti
+      }
+    }
+
+    if (syncedIds.isNotEmpty) {
+      await ReceiptRepository.markAsSynced(syncedIds);
+    }
+
+    return syncedCount;
   }
 
   /// Get database health status

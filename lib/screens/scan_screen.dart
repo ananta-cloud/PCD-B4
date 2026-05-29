@@ -9,6 +9,7 @@ import '../models/receipt.dart';
 import 'detail_screen.dart';
 import '../services/image_processing_service.dart';
 import '../services/ocr_service.dart';
+import '../services/mongo_service.dart';
 import '../repositories/receipt_repository.dart';
 
 enum _ScanPhase { idle, processing, result }
@@ -139,21 +140,37 @@ class _ScanScreenState extends State<ScanScreen> with TickerProviderStateMixin {
       // Generate unique receipt ID
       final receiptId = 'receipt_${DateTime.now().millisecondsSinceEpoch}';
 
+      // Ambil userId dari sesi login MongoDB
+      final userId = MongoService.currentUserId ?? 'unknown_user';
+
       // Create Receipt object
       final receipt = Receipt(
         id: receiptId,
-        userId:
-            'default_user', // TODO: Get from logged-in user when auth is implemented
+        userId: userId,
         totalAmount: totalAmount,
-        confidenceScore: 0.85, // Default confidence untuk OCR
+        confidenceScore: 0.85,
         scannedAt: DateTime.now(),
         isSynced: false,
         merchantName: merchantName,
-        imagePath: null, // Could store the image path if needed
+        imagePath: null,
       );
 
-      // Save to Hive
+      // Save to Hive (local)
       await ReceiptRepository.addReceipt(receipt);
+
+      // Auto-sync ke MongoDB jika ada koneksi
+      try {
+        final synced = await MongoService.insertReceipt(
+          merchantName,
+          totalAmount,
+        );
+        if (synced) {
+          await ReceiptRepository.markAsSynced([receiptId]);
+        }
+      } catch (_) {
+        // Gagal sync ke MongoDB — tetap tersimpan lokal, akan sync nanti
+      }
+
       savedReceipt = receipt;
       success = true;
     } catch (e) {

@@ -4,6 +4,7 @@ import '../core/app_colors.dart';
 import '../core/app_text_styles.dart';
 import '../repositories/receipt_repository.dart';
 import '../repositories/user_repository.dart';
+import '../services/mongo_service.dart';
 import 'login_screen.dart';
 
 class ReportsScreen extends StatelessWidget {
@@ -31,7 +32,10 @@ class ReportsScreen extends StatelessWidget {
           IconButton(
             icon: const Icon(Icons.logout, color: Colors.redAccent),
             onPressed: () async {
-              // 1. Logout user dari Hive database
+              // 1. Logout dari MongoDB session (in-memory)
+              MongoService.logout();
+
+              // 2. Logout user dari Hive database
               await UserRepository().logoutAllUsers();
 
               // 2. Hapus semua riwayat navigasi dan kembali ke halaman Login
@@ -180,22 +184,6 @@ class ReportsScreen extends StatelessWidget {
                       style: AppTextStyles.labelCaps(),
                     ),
                   ),
-                ),
-                _SettingsTile(
-                  icon: Icons.wifi_off_outlined,
-                  label: 'Offline Mode',
-                  trailing: Switch(
-                    value: false,
-                    onChanged: (_) {},
-                    activeThumbColor: AppColors.primary,
-                    inactiveThumbColor: AppColors.outlineVariant,
-                  ),
-                ),
-                const Divider(
-                  color: AppColors.outlineVariant,
-                  height: 1,
-                  indent: 20,
-                  endIndent: 20,
                 ),
                 _SettingsTile(
                   icon: Icons.person_outline,

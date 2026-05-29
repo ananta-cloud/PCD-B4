@@ -1,5 +1,7 @@
+import 'dart:developer';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'core/app_theme.dart';
 import 'core/app_colors.dart';
 import 'screens/login_screen.dart';
@@ -7,18 +9,23 @@ import 'screens/scan_screen.dart';
 import 'screens/history_screen.dart';
 import 'screens/reports_screen.dart';
 import 'services/hive_service.dart';
+import 'services/mongo_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   // ── Hive Database Initialization ────────────────────────────────────────
-  // Initialize semua Hive boxes, adapters, dan default settings
   await HiveService.initialize();
 
-  // ── Environment Configuration (optional, untuk MongoDB di masa depan) ───
-  // TODO: Uncomment dan setup untuk MongoDB backend
-  // await dotenv.load(fileName: ".env");
-  // await MongoService.connect();
+  // ── Environment & MongoDB Initialization ────────────────────────────────
+  // Load .env dulu (sync, cepat)
+  await dotenv.load(fileName: ".env");
+
+  // Koneksi MongoDB dilakukan di background — tidak block runApp()
+  // Kalau offline/timeout, app tetap jalan dan login akan tampilkan error
+  MongoService.connect().catchError((e) {
+    log("⚠️ MongoDB tidak tersambung saat startup: $e");
+  });
 
   // ── System UI ───────────────────────────────────────────────────────────
   SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
