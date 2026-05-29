@@ -47,7 +47,6 @@ class _LoginScreenState extends State<LoginScreen>
     final email = _emailCtrl.text.trim();
     final password = _passwordCtrl.text.trim();
 
-    // 1. Validasi Input
     if (email.isEmpty || password.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Email dan Password harus diisi!')),
@@ -58,28 +57,35 @@ class _LoginScreenState extends State<LoginScreen>
     if (_isLoading) return;
     setState(() => _isLoading = true);
 
-    // 2. Proses Login ke MongoDB
-    bool success = await MongoService.loginUser(email, password);
+    try {
+      bool success = await MongoService.loginUser(email, password);
 
-    if (!mounted) return;
-    setState(() => _isLoading = false);
+      if (!mounted) return;
+      setState(() => _isLoading = false);
 
-    // 3. Navigasi atau Error Handling
-    if (success) {
+      if (success) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Login Berhasil!')),
+        );
+        Navigator.of(context).pushReplacement(
+          PageRouteBuilder(
+            pageBuilder: (context, animation, secondaryAnimation) => const MainShell(),
+            transitionsBuilder: (context, anim, secondaryAnim, child) =>
+                FadeTransition(opacity: anim, child: child),
+            transitionDuration: const Duration(milliseconds: 400),
+          ),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Kredensial salah. Cek email dan password.')),
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _isLoading = false);
+      // Ini akan menampilkan ERROR ASLI ke layar HP Anda
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Login Berhasil!')),
-      );
-      Navigator.of(context).pushReplacement(
-        PageRouteBuilder(
-          pageBuilder: (context, animation, secondaryAnimation) => const MainShell(),
-          transitionsBuilder: (context, anim, secondaryAnim, child) =>
-              FadeTransition(opacity: anim, child: child),
-          transitionDuration: const Duration(milliseconds: 400),
-        ),
-      );
-    } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Login Gagal. Cek kembali email dan password Anda.')),
+        SnackBar(content: Text('ERROR SERVER: $e'), backgroundColor: Colors.red),
       );
     }
   }
@@ -173,11 +179,7 @@ class _LoginScreenState extends State<LoginScreen>
                               isLoading: _isLoading,
                               onTap: _authenticate,
                             ),
-                            const SizedBox(height: 20),
-                            AuthOrDivider(),
-                            const SizedBox(height: 20),
-                            // Catatan: Jika tombol biometric belum disetup, fungsi ini akan tetap memanggil login email/password
-                            AuthBiometricButton(onTap: _authenticate),
+                            // HAPUS AuthOrDivider dan SizedBox di sini
                           ],
                         ),
                       ),
@@ -193,7 +195,7 @@ class _LoginScreenState extends State<LoginScreen>
                                   builder: (_) => const RegisterScreen()),
                             ),
                             child: Text(
-                              'Request Access',
+                              'Register Account',
                               style: AppTextStyles.bodyMd(color: AppColors.primary)
                                   .copyWith(fontWeight: FontWeight.w600),
                             ),

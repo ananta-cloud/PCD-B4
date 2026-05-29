@@ -6,6 +6,8 @@ import 'package:image_picker/image_picker.dart';
 import '../core/app_colors.dart';
 import '../core/app_text_styles.dart';
 import '../models/receipt.dart';
+import '../services/mongo_service.dart';
+import 'detail_screen.dart';
 import '../repositories/mock_receipt_repository.dart';
 import '../services/image_processing_service.dart';
 import '../services/ocr_service.dart';
@@ -94,32 +96,54 @@ class _ScanScreenState extends State<ScanScreen> with TickerProviderStateMixin {
   void _saveReceipt() async {
     if (_isSaving || _ocrResult == null) return;
     setState(() => _isSaving = true);
-    await Future.delayed(const Duration(milliseconds: 300));
-    if (!mounted) return;
+    
+    // Asumsi toko dari hasil OCR, jika kosong fallback ke 'Scanned Receipt'
+    final merchantName = 'Scanned Receipt'; 
+    final totalAmount = _ocrResult!.total;
 
-    MockReceiptRepository.addReceipt(Receipt(
-      id: DateTime.now().millisecondsSinceEpoch.toString(),
-      userId: 'user_001',
-      totalAmount: _ocrResult!.total,
-      confidenceScore: _ocrResult!.confidence,
-      scannedAt: DateTime.now(),
-      merchantName: 'Scanned Receipt',
-    ));
+    // Simpan ke MongoDB via MongoService
+    bool success = await MongoService.insertReceipt(
+      merchantName,
+      totalAmount,
+    );
+    
     HapticFeedback.heavyImpact();
-
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Row(children: [
-        const Icon(Icons.check_circle, color: AppColors.secondary),
-        const SizedBox(width: 8),
-        Text('Struk tersimpan!', style: GoogleFonts.inter(color: AppColors.onSurface)),
-      ]),
-      backgroundColor: AppColors.surfaceContainerHigh,
-      behavior: SnackBarBehavior.floating,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-    ));
-
+    if (!mounted) return;
     setState(() { _isSaving = false; });
-    _resetScan();
+
+    if (success) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Row(children: [
+          const Icon(Icons.check_circle, color: AppColors.secondary),
+          const SizedBox(width: 8),
+          Text('Struk tersimpan!', style: GoogleFonts.inter(color: AppColors.onSurface)),
+        ]),
+        backgroundColor: AppColors.surfaceContainerHigh,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      ));
+      
+      // Buat payload map untuk dikirim ke DetailScreen
+      final receiptData = {
+        'storeName': merchantName,
+        'totalAmount': totalAmount,
+        'scanDate': DateTime.now(), // Karena baru disave, pakai waktu saat ini
+      };
+      
+      // Reset status scanner agar saat kembali, tampilan siap memindai lagi
+      _resetScan();
+      
+      // Arahkan ke halaman DetailScreen
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => DetailScreen(receiptData: receiptData),
+        ),
+      );
+      
+    } else {
+       _showError('Gagal menyimpan ke database. Pastikan Anda sudah login.');
+    }
   }
 
   void _resetScan() {
@@ -164,6 +188,7 @@ class _ScanScreenState extends State<ScanScreen> with TickerProviderStateMixin {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      resizeToAvoidBottomInset: false, // Mencegah UI tergencet oleh keyboard
       backgroundColor: Colors.black,
       body: Stack(
         fit: StackFit.expand,
@@ -255,7 +280,8 @@ class _ScanScreenState extends State<ScanScreen> with TickerProviderStateMixin {
       child: Row(mainAxisSize: MainAxisSize.min, children: [
         Icon(icon, color: color, size: 16),
         const SizedBox(width: 8),
-        Text(label, style: AppTextStyles.labelCaps(color: color)),
+        // Flexible mencegah overflow jika resolusi HP sangat kecil
+        Flexible(child: Text(label, style: AppTextStyles.labelCaps(color: color), overflow: TextOverflow.ellipsis)),
       ]),
     );
   }
@@ -282,12 +308,15 @@ class _ScanScreenState extends State<ScanScreen> with TickerProviderStateMixin {
           isDetected: false,
         ),
         child: Center(
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-            Icon(Icons.receipt_long_outlined, size: 64, color: AppColors.onSurfaceVariant.withValues(alpha: 0.4)),
-            const SizedBox(height: 16),
-            Text('Arahkan kamera ke struk\natau pilih dari galeri', textAlign: TextAlign.center,
-              style: AppTextStyles.bodyMd(color: AppColors.onSurfaceVariant.withValues(alpha: 0.6))),
-          ]),
+          // SingleChildScrollView mencegah vertical overflow jika area kamera terlalu pendek
+          child: SingleChildScrollView(
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              Icon(Icons.receipt_long_outlined, size: 64, color: AppColors.onSurfaceVariant.withValues(alpha: 0.4)),
+              const SizedBox(height: 16),
+              Text('Arahkan kamera ke struk\natau pilih dari galeri', textAlign: TextAlign.center,
+                style: AppTextStyles.bodyMd(color: AppColors.onSurfaceVariant.withValues(alpha: 0.6))),
+            ]),
+          ),
         ),
       ),
     );
@@ -410,7 +439,7 @@ class _ScanScreenState extends State<ScanScreen> with TickerProviderStateMixin {
     return GestureDetector(
       onTap: onTap,
       child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 16),
+        padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 4),
         decoration: BoxDecoration(
           color: AppColors.primaryContainer,
           borderRadius: BorderRadius.circular(14),
@@ -418,17 +447,19 @@ class _ScanScreenState extends State<ScanScreen> with TickerProviderStateMixin {
         child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
           Icon(icon, color: AppColors.onPrimaryContainer, size: 20),
           const SizedBox(width: 8),
-          Text(label, style: GoogleFonts.spaceGrotesk(fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.onPrimaryContainer)),
+          // Flexible mencegah teks 'Kamera'/'Galeri' kepotong di layar sempit
+          Flexible(child: Text(label, overflow: TextOverflow.ellipsis, style: GoogleFonts.spaceGrotesk(fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.onPrimaryContainer))),
         ]),
       ),
     );
   }
 
   Widget _buildProcessingInfo() {
-    return Row(mainAxisSize: MainAxisSize.min, children: [
+    return Row(mainAxisSize: MainAxisSize.max, children: [ // mainAxisSize diubah jadi max agar cocok dengan Flexible
       const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.primary)),
       const SizedBox(width: 12),
-      Expanded(child: Text(_processingStep, style: AppTextStyles.bodyMd(color: AppColors.onSurface))),
+      // Diubah dari Expanded ke Flexible untuk menghindari bentrok dengan constraints min
+      Flexible(child: Text(_processingStep, style: AppTextStyles.bodyMd(color: AppColors.onSurface))),
     ]);
   }
 
@@ -446,19 +477,38 @@ class _ScanScreenState extends State<ScanScreen> with TickerProviderStateMixin {
               // ── Items ──
               if (_hasItems) ...[
                 Text('ITEM BELANJA', style: AppTextStyles.labelCaps()),
-                const SizedBox(height: 8),
+                const SizedBox(height: 6), // Jarak diperkecil
                 ...result.items.map((item) => Padding(
-                  padding: const EdgeInsets.only(bottom: 8),
-                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Text(item.name, style: AppTextStyles.bodyMd(color: AppColors.onSurface)),
-                    const SizedBox(height: 2),
-                    Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+                  padding: const EdgeInsets.only(bottom: 8), // Jarak antar item diperkecil
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start, 
+                    children: [
+                      // BARIS 1: Nama Item & Total Harga
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start, 
+                        children: [
+                          Expanded(
+                            child: Text(
+                              item.name, 
+                              // Ukuran font diperkecil (misal jadi 13)
+                              style: AppTextStyles.bodyMd(color: AppColors.onSurface).copyWith(fontSize: 13, height: 1.2),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Text(
+                            _formatAmount(item.totalPrice), 
+                            // Ukuran font harga disamakan dan ditebalkan
+                            style: AppTextStyles.bodyMd(color: AppColors.onSurface).copyWith(fontSize: 13, fontWeight: FontWeight.w700),
+                          ),
+                      ]),
+                      const SizedBox(height: 2),
+                      
+                      // BARIS 2: Kuantitas (Quantity)
                       Text(
                         '${item.qty} x ${_formatAmount(item.unitPrice)}',
-                        style: AppTextStyles.label(color: AppColors.onSurfaceVariant),
+                        // Ukuran font label (quantity) diperkecil jadi 11
+                        style: AppTextStyles.label(color: AppColors.onSurfaceVariant).copyWith(fontSize: 11),
                       ),
-                      Text(_formatAmount(item.totalPrice), style: AppTextStyles.label(color: AppColors.onSurface)),
-                    ]),
                   ]),
                 )),
                 Divider(color: AppColors.outlineVariant.withValues(alpha: 0.5), height: 16),
@@ -542,14 +592,20 @@ class _ScanScreenState extends State<ScanScreen> with TickerProviderStateMixin {
   Widget _summaryRow(String label, String value, {bool isBold = false, Color? color}) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 3),
-      child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-        Text(label, style: isBold
-          ? AppTextStyles.bodyLg(color: color ?? AppColors.onSurface).copyWith(fontWeight: FontWeight.w700)
-          : AppTextStyles.bodyMd(color: AppColors.onSurfaceVariant)),
-        Text(value, style: isBold
-          ? AppTextStyles.bodyLg(color: color ?? AppColors.onSurface).copyWith(fontWeight: FontWeight.w700)
-          : AppTextStyles.bodyMd(color: color ?? AppColors.onSurface)),
-      ]),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start, // Pastikan rata atas jika teks turun baris
+        children: [
+          Expanded(
+            child: Text(label, style: isBold
+              ? AppTextStyles.bodyLg(color: color ?? AppColors.onSurface).copyWith(fontWeight: FontWeight.w700)
+              : AppTextStyles.bodyMd(color: AppColors.onSurfaceVariant)),
+          ),
+          const SizedBox(width: 12),
+          Text(value, style: isBold
+            ? AppTextStyles.bodyLg(color: color ?? AppColors.onSurface).copyWith(fontWeight: FontWeight.w700)
+            : AppTextStyles.bodyMd(color: color ?? AppColors.onSurface)),
+        ]
+      ),
     );
   }
 

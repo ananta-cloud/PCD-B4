@@ -3,6 +3,8 @@ import 'package:google_fonts/google_fonts.dart';
 import '../core/app_colors.dart';
 import '../core/app_text_styles.dart';
 import '../repositories/mock_receipt_repository.dart';
+import '../services/mongo_service.dart';
+import 'login_screen.dart';
 
 class ReportsScreen extends StatelessWidget {
   const ReportsScreen({super.key});
@@ -18,7 +20,22 @@ class ReportsScreen extends StatelessWidget {
       appBar: AppBar(
         title: const Text('ReceiptSync'),
         leading: IconButton(icon: const Icon(Icons.settings_outlined, size: 22, color: AppColors.onSurfaceVariant), onPressed: () {}),
-        actions: [IconButton(icon: const Icon(Icons.manage_accounts_outlined, size: 22, color: AppColors.onSurfaceVariant), onPressed: () {})],
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.logout, color: Colors.redAccent),
+            onPressed: () {
+              // 1. Panggil fungsi logout dari service
+              MongoService.logout();
+              
+              // 2. Hapus semua riwayat navigasi dan kembali ke halaman Login
+              Navigator.pushAndRemoveUntil(
+                context,
+                MaterialPageRoute(builder: (context) => const LoginScreen()),
+                (Route<dynamic> route) => false, 
+              );
+            },
+          )
+        ],
       ),
       body: ListView(
         padding: const EdgeInsets.all(16),
