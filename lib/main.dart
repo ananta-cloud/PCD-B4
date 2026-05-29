@@ -1,31 +1,30 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:hive_flutter/hive_flutter.dart';
 import 'core/app_theme.dart';
 import 'core/app_colors.dart';
-import 'models/receipt.dart';
-import 'models/receipt_adapter.dart';
 import 'screens/login_screen.dart';
 import 'screens/scan_screen.dart';
 import 'screens/history_screen.dart';
 import 'screens/reports_screen.dart';
+import 'services/hive_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // ── Hive init ───────────────────────────────────────────────────────────
-  await Hive.initFlutter();
-  Hive.registerAdapter(ReceiptAdapter());
-  await Hive.openBox<Receipt>('receipts');
+  // ── Hive Database Initialization ────────────────────────────────────────
+  // Initialize semua Hive boxes, adapters, dan default settings
+  await HiveService.initialize();
 
   // ── System UI ───────────────────────────────────────────────────────────
   SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
-  SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
-    statusBarColor: Colors.transparent,
-    statusBarIconBrightness: Brightness.light,
-    systemNavigationBarColor: AppColors.surfaceContainerLow,
-    systemNavigationBarIconBrightness: Brightness.light,
-  ));
+  SystemChrome.setSystemUIOverlayStyle(
+    const SystemUiOverlayStyle(
+      statusBarColor: Colors.transparent,
+      statusBarIconBrightness: Brightness.light,
+      systemNavigationBarColor: AppColors.surfaceContainerLow,
+      systemNavigationBarIconBrightness: Brightness.light,
+    ),
+  );
   runApp(const SmartReceiptScannerApp());
 }
 
@@ -54,11 +53,7 @@ class MainShell extends StatefulWidget {
 class _MainShellState extends State<MainShell> {
   int _currentIndex = 0;
 
-  static const _screens = [
-    ScanScreen(),
-    HistoryScreen(),
-    ReportsScreen(),
-  ];
+  static const _screens = [ScanScreen(), HistoryScreen(), ReportsScreen()];
 
   @override
   Widget build(BuildContext context) {
