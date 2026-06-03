@@ -8,6 +8,7 @@ import '../core/app_text_styles.dart';
 import '../models/receipt.dart';
 import 'detail_screen.dart';
 import '../services/image_processing_service.dart';
+import '../services/opencv_service.dart';
 import '../services/ocr_service.dart';
 import '../services/mongo_service.dart';
 import '../repositories/receipt_repository.dart';
@@ -102,11 +103,24 @@ class _ScanScreenState extends State<ScanScreen> with TickerProviderStateMixin {
       if (!mounted) return;
       setState(() {
         _thresholdFile = threshFile;
+        _processingStep = 'Mendeteksi dan memotong struk...';
+      });
+
+      // Step 3: Crop receipt body using OpenCV before OCR
+      File imageForOcr = file;
+      final croppedBytes = await OpenCVService().cropReceiptBody(file.path);
+      if (croppedBytes != null && croppedBytes.isNotEmpty) {
+        final tempPath = '${Directory.systemTemp.path}/cropped_receipt_${DateTime.now().millisecondsSinceEpoch}.jpg';
+        final tempFile = File(tempPath);
+        await tempFile.writeAsBytes(croppedBytes, flush: true);
+        imageForOcr = tempFile;
+      }
+
+      setState(() {
         _processingStep = 'Menjalankan OCR...';
       });
 
-      // Step 3: OCR (use original image for best accuracy)
-      final result = await OcrService.processImage(file);
+      final result = await OcrService.processImage(imageForOcr);
       if (!mounted) return;
 
       setState(() {
