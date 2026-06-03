@@ -1,19 +1,13 @@
 import 'dart:io';
-import 'dart:typed_data';
-import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:image/image.dart' as img;
 import 'package:google_fonts/google_fonts.dart';
 import '../core/app_colors.dart';
-import '../core/app_text_styles.dart';
-import '../models/receipt.dart';
 import '../services/ocr_service.dart';
-import '../repositories/receipt_repository.dart';
-import 'detail_screen.dart';
+import 'ocr_preview_screen.dart';
 
 class CropScreen extends StatefulWidget {
   final File imageFile;
-
   const CropScreen({super.key, required this.imageFile});
 
   @override
@@ -21,7 +15,7 @@ class CropScreen extends StatefulWidget {
 }
 
 class _CropScreenState extends State<CropScreen> {
-  late img.Image _originalImage;
+  img.Image? _originalImage;
   late Offset _cropTopLeft;
   late Size _cropSize;
 
@@ -38,180 +32,143 @@ class _CropScreenState extends State<CropScreen> {
     _loadImage();
   }
 
-  void _loadImage() async {
+  Future<void> _loadImage() async {
     try {
       final bytes = await widget.imageFile.readAsBytes();
       final image = img.decodeImage(bytes);
-
-      if (image == null) {
-        throw "Gagal decode image";
-      }
+      if (image == null) throw "Gagal decode image";
 
       setState(() {
         _originalImage = image;
-        // Default crop: 80% width, 60% height, centered
-        final w = _originalImage.width.toDouble();
-        final h = _originalImage.height.toDouble();
+        final w = image.width.toDouble();
+        final h = image.height.toDouble();
         final cropW = w * 0.85;
-        final cropH = h * 0.65;
-
+        final cropH = h * 0.70;
         _cropTopLeft = Offset((w - cropW) / 2, (h - cropH) / 2);
         _cropSize = Size(cropW, cropH);
         _isLoading = false;
       });
     } catch (e) {
-      print("❌ Error load image: $e");
+      debugPrint("❌ Error load image: $e");
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text("Gagal load image: $e")));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text("Gagal load image: $e")));
         Navigator.pop(context);
       }
     }
   }
 
-  void _onPanStart(DragStartDetails details) {
-    final renderBox = context.findRenderObject() as RenderBox;
-    final pos = renderBox.globalToLocal(details.globalPosition);
+  // ── Koordinat helper ────────────────────────────────────────────────────
 
-    // Calculate image scaling
-    final containerSize = MediaQuery.of(context).size;
-    final scaleX = containerSize.width / _originalImage.width;
-    final scaleY = containerSize.height / _originalImage.height;
-    final scale = min(scaleX, scaleY);
+  /// Hitung scale dan offset gambar di layar (BoxFit.contain logic)
+  ({double scale, double offsetX, double offsetY}) _getImageTransform(Size containerSize) {
+    final image = _originalImage!;
+    final scaleX = containerSize.width / image.width;
+    final scaleY = containerSize.height / image.height;
+    final scale = scaleX < scaleY ? scaleX : scaleY;
+    final scaledW = image.width * scale;
+    final scaledH = image.height * scale;
+    final offsetX = (containerSize.width - scaledW) / 2;
+    final offsetY = (containerSize.height - scaledH) / 2;
+    return (scale: scale, offsetX: offsetX, offsetY: offsetY);
+  }
 
-    final scaledWidth = _originalImage.width * scale;
-    final scaledHeight = _originalImage.height * scale;
-    final offsetX = (containerSize.width - scaledWidth) / 2;
-    final offsetY = (containerSize.height - scaledHeight) / 2;
+  Offset _screenToImage(Offset screenPos, Size containerSize) {
+    final t = _getImageTransform(containerSize);
+    return Offset(
+      (screenPos.dx - t.offsetX) / t.scale,
+      (screenPos.dy - t.offsetY) / t.scale,
+    );
+  }
 
-    // Convert screen coordinates to image coordinates
-    final imageX = (pos.dx - offsetX) / scale;
-    final imageY = (pos.dy - offsetY) / scale;
+  // ── Drag handlers ────────────────────────────────────────────────────────
 
-    // Check if we're dragging a corner or moving the whole box
-    const cornerSize = 40.0;
+  void _onPanStart(DragStartDetails details, Size containerSize) {
+    final imgPos = _screenToImage(details.globalPosition, containerSize);
+    final t = _getImageTransform(containerSize);
+    final hitRadius = 40.0 / t.scale; // 40px layar dikonversi ke image coords
+
     final rect = Rect.fromLTWH(
-      _cropTopLeft.dx,
-      _cropTopLeft.dy,
-      _cropSize.width,
-      _cropSize.height,
+      _cropTopLeft.dx, _cropTopLeft.dy, _cropSize.width, _cropSize.height,
     );
 
-    // Top-left
-    if ((Offset(imageX, imageY) - rect.topLeft).distance < cornerSize / scale) {
+    if ((imgPos - rect.topLeft).distance < hitRadius) {
       _draggedCorner = DraggedCorner.topLeft;
-    }
-    // Top-right
-    else if ((Offset(imageX, imageY) - rect.topRight).distance <
-        cornerSize / scale) {
+    } else if ((imgPos - rect.topRight).distance < hitRadius) {
       _draggedCorner = DraggedCorner.topRight;
-    }
-    // Bottom-left
-    else if ((Offset(imageX, imageY) - rect.bottomLeft).distance <
-        cornerSize / scale) {
+    } else if ((imgPos - rect.bottomLeft).distance < hitRadius) {
       _draggedCorner = DraggedCorner.bottomLeft;
-    }
-    // Bottom-right
-    else if ((Offset(imageX, imageY) - rect.bottomRight).distance <
-        cornerSize / scale) {
+    } else if ((imgPos - rect.bottomRight).distance < hitRadius) {
       _draggedCorner = DraggedCorner.bottomRight;
-    }
-    // Move whole rect
-    else if (rect.contains(Offset(imageX, imageY))) {
+    } else if (rect.contains(imgPos)) {
       _draggedCorner = DraggedCorner.move;
     }
 
-    _dragStart = Offset(imageX, imageY);
+    _dragStart = imgPos;
   }
 
-  void _onPanUpdate(DragUpdateDetails details) {
+  void _onPanUpdate(DragUpdateDetails details, Size containerSize) {
     if (_draggedCorner == null || _dragStart == null) return;
 
-    final renderBox = context.findRenderObject() as RenderBox;
-    final pos = renderBox.globalToLocal(details.globalPosition);
-
-    // Calculate image scaling
-    final containerSize = MediaQuery.of(context).size;
-    final scaleX = containerSize.width / _originalImage.width;
-    final scaleY = containerSize.height / _originalImage.height;
-    final scale = min(scaleX, scaleY);
-
-    final scaledWidth = _originalImage.width * scale;
-    final scaledHeight = _originalImage.height * scale;
-    final offsetX = (containerSize.width - scaledWidth) / 2;
-    final offsetY = (containerSize.height - scaledHeight) / 2;
-
-    // Convert screen coordinates to image coordinates
-    final imageX = (pos.dx - offsetX) / scale;
-    final imageY = (pos.dy - offsetY) / scale;
-    final delta = Offset(imageX, imageY) - _dragStart!;
+    final imgPos = _screenToImage(details.globalPosition, containerSize);
+    final delta = imgPos - _dragStart!;
+    final imgW = _originalImage!.width.toDouble();
+    final imgH = _originalImage!.height.toDouble();
 
     setState(() {
       final rect = Rect.fromLTWH(
-        _cropTopLeft.dx,
-        _cropTopLeft.dy,
-        _cropSize.width,
-        _cropSize.height,
+        _cropTopLeft.dx, _cropTopLeft.dy, _cropSize.width, _cropSize.height,
       );
+      const minSize = 80.0;
 
-      late Rect newRect;
-
+      Rect newRect;
       switch (_draggedCorner!) {
         case DraggedCorner.topLeft:
-          newRect = Rect.fromLTWH(
-            (rect.left + delta.dx).clamp(0, rect.right - 50),
-            (rect.top + delta.dy).clamp(0, rect.bottom - 50),
-            (rect.width - delta.dx).clamp(50, rect.width + rect.left),
-            (rect.height - delta.dy).clamp(50, rect.height + rect.top),
+          newRect = Rect.fromLTRB(
+            (rect.left + delta.dx).clamp(0.0, rect.right - minSize),
+            (rect.top + delta.dy).clamp(0.0, rect.bottom - minSize),
+            rect.right,
+            rect.bottom,
           );
         case DraggedCorner.topRight:
-          newRect = Rect.fromLTWH(
+          newRect = Rect.fromLTRB(
             rect.left,
-            (rect.top + delta.dy).clamp(0, rect.bottom - 50),
-            (rect.width + delta.dx).clamp(50, _originalImage.width - rect.left),
-            (rect.height - delta.dy).clamp(50, rect.height + rect.top),
+            (rect.top + delta.dy).clamp(0.0, rect.bottom - minSize),
+            (rect.right + delta.dx).clamp(rect.left + minSize, imgW),
+            rect.bottom,
           );
         case DraggedCorner.bottomLeft:
-          newRect = Rect.fromLTWH(
-            (rect.left + delta.dx).clamp(0, rect.right - 50),
+          newRect = Rect.fromLTRB(
+            (rect.left + delta.dx).clamp(0.0, rect.right - minSize),
             rect.top,
-            (rect.width - delta.dx).clamp(50, rect.width + rect.left),
-            (rect.height + delta.dy).clamp(
-              50,
-              _originalImage.height - rect.top,
-            ),
+            rect.right,
+            (rect.bottom + delta.dy).clamp(rect.top + minSize, imgH),
           );
         case DraggedCorner.bottomRight:
-          newRect = Rect.fromLTWH(
+          newRect = Rect.fromLTRB(
             rect.left,
             rect.top,
-            (rect.width + delta.dx).clamp(50, _originalImage.width - rect.left),
-            (rect.height + delta.dy).clamp(
-              50,
-              _originalImage.height - rect.top,
-            ),
+            (rect.right + delta.dx).clamp(rect.left + minSize, imgW),
+            (rect.bottom + delta.dy).clamp(rect.top + minSize, imgH),
           );
         case DraggedCorner.move:
-          newRect = rect.shift(delta);
-          newRect = Rect.fromLTWH(
-            newRect.left.clamp(0, _originalImage.width - rect.width),
-            newRect.top.clamp(0, _originalImage.height - rect.height),
-            newRect.width,
-            newRect.height,
-          );
+          final newLeft = (rect.left + delta.dx).clamp(0.0, imgW - rect.width);
+          final newTop = (rect.top + delta.dy).clamp(0.0, imgH - rect.height);
+          newRect = Rect.fromLTWH(newLeft, newTop, rect.width, rect.height);
       }
 
       _cropTopLeft = newRect.topLeft;
       _cropSize = newRect.size;
-      _dragStart = Offset(imageX, imageY);
+      _dragStart = imgPos;
     });
   }
 
-  void _onPanEnd(DragEndDetails details) {
+  void _onPanEnd(DragEndDetails _) {
     _draggedCorner = null;
     _dragStart = null;
   }
+
+  // ── Proses crop + OCR ────────────────────────────────────────────────────
 
   Future<void> _processCrop() async {
     setState(() {
@@ -220,73 +177,53 @@ class _CropScreenState extends State<CropScreen> {
     });
 
     try {
-      // Crop image
+      // 1. Crop gambar
       final croppedImg = img.copyCrop(
-        _originalImage,
-        x: _cropTopLeft.dx.toInt(),
-        y: _cropTopLeft.dy.toInt(),
-        width: _cropSize.width.toInt(),
-        height: _cropSize.height.toInt(),
+        _originalImage!,
+        x: _cropTopLeft.dx.round().clamp(0, _originalImage!.width - 1),
+        y: _cropTopLeft.dy.round().clamp(0, _originalImage!.height - 1),
+        width: _cropSize.width.round().clamp(1, _originalImage!.width),
+        height: _cropSize.height.round().clamp(1, _originalImage!.height),
       );
 
-      // Save cropped image
-      final tempDir = await _getTempImagePath();
-      final croppedFile = File(tempDir);
-      croppedFile.writeAsBytesSync(img.encodeJpg(croppedImg));
+      // 2. Simpan ke temp file
+      final tempPath =
+          '${Directory.systemTemp.path}/crop_${DateTime.now().millisecondsSinceEpoch}.jpg';
+      final croppedFile = File(tempPath)
+        ..writeAsBytesSync(img.encodeJpg(croppedImg, quality: 92));
 
       if (!mounted) return;
+      setState(() => _processingStep = 'Menjalankan OCR...');
 
-      setState(() {
-        _processingStep = 'Ekstraksi teks (OCR)...';
-      });
-
-      // Extract text with OCR
+      // 3. OCR
       final parsedReceipt = await OcrService.processImage(croppedFile);
 
       if (!mounted) return;
 
-      setState(() => _processingStep = 'Menyimpan hasil...');
-
-      // Create receipt model
-      final receipt = Receipt(
-        id: DateTime.now().millisecondsSinceEpoch.toString(),
-        userId: 'user_1',
-        totalAmount: parsedReceipt.total,
-        confidenceScore: parsedReceipt.confidence,
-        scannedAt: DateTime.now(),
-        isSynced: false,
-        merchantName: 'Scanned Receipt',
-        imagePath: croppedFile.path,
-      );
-
-      // Save to repository
-      await ReceiptRepository.addReceipt(receipt);
-
-      if (!mounted) return;
-
-      // Navigate to detail
+      // 4. Ke halaman preview OCR — user konfirmasi sebelum simpan
       Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (ctx) => DetailScreen(receipt: receipt)),
+        MaterialPageRoute(
+          builder: (_) => OcrPreviewScreen(
+            croppedFile: croppedFile,
+            parsedReceipt: parsedReceipt,
+          ),
+        ),
       );
     } catch (e) {
-      print("❌ Error process crop: $e");
+      debugPrint("❌ Error process crop: $e");
       if (mounted) {
         setState(() => _isProcessing = false);
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text("Error: $e")));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text("Error: $e")));
       }
     }
   }
 
-  Future<String> _getTempImagePath() async {
-    final dir = await Directory.systemTemp.createTemp('receipt_scanner_');
-    return '${dir.path}/cropped_receipt_${DateTime.now().millisecondsSinceEpoch}.jpg';
-  }
+  // ── Build ────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
-    if (_isLoading) {
+    if (_isLoading || _originalImage == null) {
       return Scaffold(
         backgroundColor: Colors.black,
         body: Center(
@@ -295,10 +232,7 @@ class _CropScreenState extends State<CropScreen> {
             children: [
               const CircularProgressIndicator(color: Colors.white),
               const SizedBox(height: 20),
-              Text(
-                'Loading image...',
-                style: GoogleFonts.inter(color: Colors.white),
-              ),
+              Text('Memuat gambar...', style: GoogleFonts.inter(color: Colors.white)),
             ],
           ),
         ),
@@ -307,151 +241,136 @@ class _CropScreenState extends State<CropScreen> {
 
     return Scaffold(
       backgroundColor: Colors.black,
-      appBar: AppBar(
-        backgroundColor: Colors.black,
-        elevation: 0,
-        title: Text(
-          "Crop & Adjust",
-          style: GoogleFonts.spaceMono(
-            fontSize: 20,
-            fontWeight: FontWeight.bold,
-            color: Colors.white,
-          ),
-        ),
-        centerTitle: true,
-      ),
-      body: Stack(
-        children: [
-          // Image display with gesture detection for dragging
-          GestureDetector(
-            onPanStart: _onPanStart,
-            onPanUpdate: _onPanUpdate,
-            onPanEnd: _onPanEnd,
-            child: Stack(
-              children: [
-                // Base image
-                Center(
-                  child: Image.file(widget.imageFile, fit: BoxFit.contain),
-                ),
-                // Crop overlay
-                CustomPaint(
+      body: LayoutBuilder(
+        builder: (context, constraints) {
+          final containerSize = Size(constraints.maxWidth, constraints.maxHeight);
+          return Stack(
+            children: [
+              // Gambar asli
+              SizedBox.expand(
+                child: Image.file(widget.imageFile, fit: BoxFit.contain),
+              ),
+
+              // Crop overlay dengan handle sudut
+              GestureDetector(
+                onPanStart: (d) => _onPanStart(d, containerSize),
+                onPanUpdate: (d) => _onPanUpdate(d, containerSize),
+                onPanEnd: _onPanEnd,
+                child: CustomPaint(
                   painter: CropOverlayPainter(
                     imageSize: Size(
-                      _originalImage.width.toDouble(),
-                      _originalImage.height.toDouble(),
+                      _originalImage!.width.toDouble(),
+                      _originalImage!.height.toDouble(),
                     ),
                     cropTopLeft: _cropTopLeft,
                     cropSize: _cropSize,
-                    containerSize: MediaQuery.of(context).size,
+                    containerSize: containerSize,
                   ),
                   size: Size.infinite,
                 ),
-              ],
-            ),
-          ),
-
-          // Guide text
-          Positioned(
-            top: 30,
-            left: 0,
-            right: 0,
-            child: Text(
-              "Drag corners atau area untuk adjust crop",
-              textAlign: TextAlign.center,
-              style: GoogleFonts.inter(fontSize: 12, color: Colors.white70),
-            ),
-          ),
-
-          // Bottom controls
-          if (!_isProcessing)
-            Positioned(
-              bottom: 30,
-              left: 0,
-              right: 0,
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  // Cancel button
-                  GestureDetector(
-                    onTap: () => Navigator.pop(context),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 30,
-                        vertical: 12,
-                      ),
-                      decoration: BoxDecoration(
-                        border: Border.all(color: Colors.white30, width: 2),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Text(
-                        "Batal",
-                        style: GoogleFonts.inter(
-                          color: Colors.white,
-                          fontSize: 14,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 20),
-                  // Process button
-                  GestureDetector(
-                    onTap: _processCrop,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 30,
-                        vertical: 12,
-                      ),
-                      decoration: BoxDecoration(
-                        color: AppColors.primary,
-                        borderRadius: BorderRadius.circular(8),
-                        boxShadow: [
-                          BoxShadow(
-                            color: AppColors.primary.withOpacity(0.5),
-                            blurRadius: 10,
-                            spreadRadius: 1,
-                          ),
-                        ],
-                      ),
-                      child: Text(
-                        "Proses",
-                        style: GoogleFonts.inter(
-                          color: Colors.white,
-                          fontSize: 14,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
               ),
-            ),
 
-          // Processing overlay
-          if (_isProcessing)
-            Container(
-              color: Colors.black.withOpacity(0.7),
-              child: Center(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    const CircularProgressIndicator(
-                      color: Colors.white,
-                      strokeWidth: 2,
+              // Instruksi atas
+              SafeArea(
+                child: Align(
+                  alignment: Alignment.topCenter,
+                  child: Container(
+                    margin: const EdgeInsets.only(top: 8),
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.6),
+                      borderRadius: BorderRadius.circular(20),
                     ),
-                    const SizedBox(height: 30),
-                    Text(
-                      _processingStep,
-                      style: GoogleFonts.inter(
-                        color: Colors.white,
-                        fontSize: 16,
-                      ),
+                    child: Text(
+                      "Seret sudut untuk menyesuaikan area crop",
+                      style: GoogleFonts.inter(fontSize: 12, color: Colors.white70),
                     ),
-                  ],
+                  ),
                 ),
               ),
-            ),
-        ],
+
+              // Tombol bawah
+              if (!_isProcessing)
+                Positioned(
+                  bottom: 40,
+                  left: 24,
+                  right: 24,
+                  child: Row(
+                    children: [
+                      // Batal
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: () => Navigator.pop(context),
+                          style: OutlinedButton.styleFrom(
+                            side: const BorderSide(color: Colors.white38, width: 1.5),
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                          ),
+                          child: Text(
+                            'Batal',
+                            style: GoogleFonts.inter(
+                              color: Colors.white,
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 16),
+                      // Proses
+                      Expanded(
+                        flex: 2,
+                        child: ElevatedButton.icon(
+                          onPressed: _processCrop,
+                          icon: const Icon(Icons.auto_fix_high_rounded, size: 18),
+                          label: Text(
+                            'Proses & OCR',
+                            style: GoogleFonts.inter(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: AppColors.primary,
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            elevation: 0,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+
+              // Processing overlay
+              if (_isProcessing)
+                Container(
+                  color: Colors.black.withValues(alpha: 0.75),
+                  child: Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const CircularProgressIndicator(
+                          color: Colors.white,
+                          strokeWidth: 2.5,
+                        ),
+                        const SizedBox(height: 24),
+                        Text(
+                          _processingStep,
+                          style: GoogleFonts.inter(color: Colors.white, fontSize: 15),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+            ],
+          );
+        },
       ),
     );
   }
@@ -474,69 +393,90 @@ class CropOverlayPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    // Calculate how the image is scaled to fit in the container
     final scaleX = containerSize.width / imageSize.width;
     final scaleY = containerSize.height / imageSize.height;
-    final scale = min(scaleX, scaleY);
+    final scale = scaleX < scaleY ? scaleX : scaleY;
 
-    final scaledWidth = imageSize.width * scale;
-    final scaledHeight = imageSize.height * scale;
-    final offsetX = (containerSize.width - scaledWidth) / 2;
-    final offsetY = (containerSize.height - scaledHeight) / 2;
+    final scaledW = imageSize.width * scale;
+    final scaledH = imageSize.height * scale;
+    final offX = (containerSize.width - scaledW) / 2;
+    final offY = (containerSize.height - scaledH) / 2;
 
-    // Scale crop rect to container coordinates
-    final scaledCropTopLeft = Offset(
-      offsetX + cropTopLeft.dx * scale,
-      offsetY + cropTopLeft.dy * scale,
-    );
-    final scaledCropSize = Size(
+    // Crop rect dalam koordinat layar
+    final cropRect = Rect.fromLTWH(
+      offX + cropTopLeft.dx * scale,
+      offY + cropTopLeft.dy * scale,
       cropSize.width * scale,
       cropSize.height * scale,
     );
 
-    final cropRect = Rect.fromLTWH(
-      scaledCropTopLeft.dx,
-      scaledCropTopLeft.dy,
-      scaledCropSize.width,
-      scaledCropSize.height,
-    );
-
-    // Dark overlay outside crop area
-    final path = Path()
+    // Dark overlay di luar crop
+    final overlayPath = Path()
       ..addRect(Rect.fromLTWH(0, 0, size.width, size.height))
       ..addRect(cropRect)
       ..fillType = PathFillType.evenOdd;
+    canvas.drawPath(overlayPath, Paint()..color = Colors.black.withValues(alpha: 0.55));
 
-    canvas.drawPath(path, Paint()..color = Colors.black.withOpacity(0.5));
-
-    // Crop rect border
+    // Border crop
     canvas.drawRect(
       cropRect,
       Paint()
         ..color = Colors.white
-        ..strokeWidth = 3
+        ..strokeWidth = 2
         ..style = PaintingStyle.stroke,
     );
 
-    // Corner handles
-    const cornerSize = 25.0;
-    final cornerPaint = Paint()..color = Colors.white;
+    // Grid lines (rule of thirds)
+    final gridPaint = Paint()
+      ..color = Colors.white.withValues(alpha: 0.2)
+      ..strokeWidth = 0.8;
+    for (int i = 1; i < 3; i++) {
+      final x = cropRect.left + cropRect.width * i / 3;
+      final y = cropRect.top + cropRect.height * i / 3;
+      canvas.drawLine(Offset(x, cropRect.top), Offset(x, cropRect.bottom), gridPaint);
+      canvas.drawLine(Offset(cropRect.left, y), Offset(cropRect.right, y), gridPaint);
+    }
 
-    _drawCornerHandle(canvas, cropRect.topLeft, cornerSize, cornerPaint);
-    _drawCornerHandle(canvas, cropRect.topRight, cornerSize, cornerPaint);
-    _drawCornerHandle(canvas, cropRect.bottomLeft, cornerSize, cornerPaint);
-    _drawCornerHandle(canvas, cropRect.bottomRight, cornerSize, cornerPaint);
-  }
+    // Handle sudut — lingkaran putih besar agar mudah di-tap
+    const handleR = 12.0;
+    final handleFill = Paint()..color = Colors.white;
+    final handleBorder = Paint()
+      ..color = AppColors.primary
+      ..strokeWidth = 2.5
+      ..style = PaintingStyle.stroke;
 
-  void _drawCornerHandle(Canvas canvas, Offset pos, double size, Paint paint) {
-    canvas.drawCircle(pos, size / 2, paint);
+    for (final corner in [
+      cropRect.topLeft,
+      cropRect.topRight,
+      cropRect.bottomLeft,
+      cropRect.bottomRight,
+    ]) {
+      canvas.drawCircle(corner, handleR, handleFill);
+      canvas.drawCircle(corner, handleR, handleBorder);
+    }
+
+    // Corner lines (L-shape accent)
+    const cLen = 22.0;
+    const cW = 3.5;
+    final cp = Paint()
+      ..color = AppColors.primary
+      ..strokeWidth = cW
+      ..style = PaintingStyle.stroke;
+
+    canvas.drawLine(cropRect.topLeft.translate(handleR, 0), cropRect.topLeft.translate(handleR + cLen, 0), cp);
+    canvas.drawLine(cropRect.topLeft.translate(0, handleR), cropRect.topLeft.translate(0, handleR + cLen), cp);
+
+    canvas.drawLine(cropRect.topRight.translate(-handleR, 0), cropRect.topRight.translate(-handleR - cLen, 0), cp);
+    canvas.drawLine(cropRect.topRight.translate(0, handleR), cropRect.topRight.translate(0, handleR + cLen), cp);
+
+    canvas.drawLine(cropRect.bottomLeft.translate(handleR, 0), cropRect.bottomLeft.translate(handleR + cLen, 0), cp);
+    canvas.drawLine(cropRect.bottomLeft.translate(0, -handleR), cropRect.bottomLeft.translate(0, -handleR - cLen), cp);
+
+    canvas.drawLine(cropRect.bottomRight.translate(-handleR, 0), cropRect.bottomRight.translate(-handleR - cLen, 0), cp);
+    canvas.drawLine(cropRect.bottomRight.translate(0, -handleR), cropRect.bottomRight.translate(0, -handleR - cLen), cp);
   }
 
   @override
-  bool shouldRepaint(CropOverlayPainter oldDelegate) {
-    return oldDelegate.cropTopLeft != cropTopLeft ||
-        oldDelegate.cropSize != cropSize;
-  }
+  bool shouldRepaint(CropOverlayPainter old) =>
+      old.cropTopLeft != cropTopLeft || old.cropSize != cropSize;
 }
-
-double min(double a, double b) => a < b ? a : b;
