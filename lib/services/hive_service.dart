@@ -55,29 +55,56 @@ class HiveService {
       Hive.registerAdapter(AppSettingsAdapter());
       print('✓ Semua TypeAdapter terdaftar');
 
-      // 3. Buka semua boxes
-      await Hive.openBox<Receipt>(receiptsBoxName);
-      print('✓ Box $receiptsBoxName dibuka');
+      // 3. Buka semua boxes - jika error, just skip dan lanjut
+      try {
+        await Hive.openBox<Receipt>(receiptsBoxName);
+        print('✓ Box $receiptsBoxName dibuka');
+      } catch (e) {
+        print('⚠️ Gagal membuka box $receiptsBoxName: $e - akan skip');
+      }
 
-      await Hive.openBox<User>(usersBoxName);
-      print('✓ Box $usersBoxName dibuka');
+      try {
+        await Hive.openBox<User>(usersBoxName);
+        print('✓ Box $usersBoxName dibuka');
+      } catch (e) {
+        print('⚠️ Gagal membuka box $usersBoxName: $e - akan skip');
+      }
 
-      await Hive.openBox<AppSettings>(settingsBoxName);
-      print('✓ Box $settingsBoxName dibuka');
+      try {
+        await Hive.openBox<AppSettings>(settingsBoxName);
+        print('✓ Box $settingsBoxName dibuka');
+      } catch (e) {
+        print('⚠️ Gagal membuka box $settingsBoxName: $e - akan skip');
+      }
 
-      // 4. Initialize default settings jika kosong
-      final settingsBox = Hive.box<AppSettings>(settingsBoxName);
-      if (settingsBox.isEmpty) {
-        final defaultSettings = AppSettings.defaultSettings();
-        await settingsBox.put('app_settings', defaultSettings);
-        print('✓ Default app settings dibuat');
+      // 4. Initialize default settings jika box berhasil dibuka
+      try {
+        final settingsBox = Hive.box<AppSettings>(settingsBoxName);
+        if (settingsBox.isEmpty) {
+          final defaultSettings = AppSettings.defaultSettings();
+          await settingsBox.put('app_settings', defaultSettings);
+          print('✓ Default app settings dibuat');
+        }
+      } catch (e) {
+        print('⚠️ Gagal setup default settings: $e');
       }
 
       _isInitialized = true;
-      print('✅ Hive Service berhasil diinisialisasi');
+      print('✅ Hive Service initialization complete (partial or full)');
     } catch (e) {
-      print('❌ Error saat inisialisasi Hive: $e');
+      print('❌ Critical error during Hive initialization: $e');
+      _isInitialized = false;
       rethrow;
+    }
+  }
+
+  /// Helper method to safely open a box, handling corrupted data
+  static Future<void> _safeOpenBox<T>(String boxName) async {
+    try {
+      await Hive.openBox<T>(boxName);
+      print('✓ Box $boxName dibuka');
+    } catch (e) {
+      print('⚠️ Box $boxName gagal: $e');
     }
   }
 

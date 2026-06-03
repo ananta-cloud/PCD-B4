@@ -14,30 +14,47 @@ import 'services/mongo_service.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // ── Hive Database Initialization ────────────────────────────────────────
-  await HiveService.initialize();
+  try {
+    // ── Hive Database Initialization ────────────────────────────────────────
+    print('🔄 Initializing Hive...');
+    await HiveService.initialize();
+    print('✓ Hive initialized');
 
-  // ── Environment & MongoDB Initialization ────────────────────────────────
-  // Load .env dulu (sync, cepat)
-  await dotenv.load(fileName: ".env");
+    // ── Environment & MongoDB Initialization ────────────────────────────────
+    // Load .env dulu (sync, cepat)
+    print('🔄 Loading .env...');
+    await dotenv.load(fileName: ".env");
+    print('✓ .env loaded');
 
-  // Koneksi MongoDB dilakukan di background — tidak block runApp()
-  // Kalau offline/timeout, app tetap jalan dan login akan tampilkan error
-  MongoService.connect().catchError((e) {
-    log("⚠️ MongoDB tidak tersambung saat startup: $e");
-  });
+    // Koneksi MongoDB dilakukan di background — tidak block runApp()
+    // Kalau offline/timeout, app tetap jalan dan login akan tampilkan error
+    MongoService.connect().catchError((e) {
+      log("⚠️ MongoDB tidak tersambung saat startup: $e");
+    });
 
-  // ── System UI ───────────────────────────────────────────────────────────
-  SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
-  SystemChrome.setSystemUIOverlayStyle(
-    const SystemUiOverlayStyle(
-      statusBarColor: Colors.transparent,
-      statusBarIconBrightness: Brightness.light,
-      systemNavigationBarColor: AppColors.surfaceContainerLow,
-      systemNavigationBarIconBrightness: Brightness.light,
-    ),
-  );
-  runApp(const SmartReceiptScannerApp());
+    // ── System UI ───────────────────────────────────────────────────────────
+    print('🔄 Setting up SystemChrome...');
+    SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
+    SystemChrome.setSystemUIOverlayStyle(
+      const SystemUiOverlayStyle(
+        statusBarColor: Colors.transparent,
+        statusBarIconBrightness: Brightness.light,
+        systemNavigationBarColor: AppColors.surfaceContainerLow,
+        systemNavigationBarIconBrightness: Brightness.light,
+      ),
+    );
+    print('✓ SystemChrome set');
+
+    print('✅ All initialization complete, running app...');
+    runApp(const SmartReceiptScannerApp());
+  } catch (e, stackTrace) {
+    print('❌ FATAL ERROR during initialization: $e');
+    print('Stack trace: $stackTrace');
+    // Show error dialog instead of crashing
+    runApp(
+      ErrorDisplayApp(error: e.toString(), stackTrace: stackTrace.toString()),
+    );
+  }
 }
 
 class SmartReceiptScannerApp extends StatelessWidget {
@@ -91,6 +108,80 @@ class _MainShellState extends State<MainShell> {
             label: 'Reports',
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Error display app — shown if initialization fails
+class ErrorDisplayApp extends StatelessWidget {
+  final String error;
+  final String stackTrace;
+
+  const ErrorDisplayApp({
+    required this.error,
+    required this.stackTrace,
+    super.key,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'Smart Receipt Scanner - ERROR',
+      debugShowCheckedModeBanner: false,
+      theme: ThemeData(brightness: Brightness.dark, useMaterial3: true),
+      home: Scaffold(
+        backgroundColor: Colors.red.shade900,
+        body: SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const SizedBox(height: 24),
+                  const Icon(Icons.error, size: 48, color: Colors.white),
+                  const SizedBox(height: 16),
+                  const Text(
+                    '❌ INITIALIZATION ERROR',
+                    style: TextStyle(
+                      fontSize: 24,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.white,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    error,
+                    style: const TextStyle(
+                      fontSize: 16,
+                      color: Colors.white,
+                      fontFamily: 'monospace',
+                    ),
+                  ),
+                  const SizedBox(height: 24),
+                  const Text(
+                    'Stack Trace:',
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.white,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  SelectableText(
+                    stackTrace,
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: Colors.white70,
+                      fontFamily: 'monospace',
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
       ),
     );
   }
