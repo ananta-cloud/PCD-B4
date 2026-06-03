@@ -20,7 +20,7 @@ class OpenCVService {
       print("Loaded image without preprocessing: ${bytes.length} bytes");
       return bytes;
     } catch (e) {
-      print("Error di OpenCVService: $e");
+      print("❌ Error di OpenCVService: $e");
       return null;
     }
   }
