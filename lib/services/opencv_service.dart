@@ -4,26 +4,43 @@ import 'package:opencv_dart/opencv_dart.dart' as cv;
 
 class OpenCVService {
   
-  /// TAHAP UTAMA: Fungsi yang akan dipanggil oleh Repository untuk memotong bodi struk
+  /// MAIN PIPELINE: 2-Tahap Cropping untuk Akurasi OCR Maksimal
+  /// 
+  /// Alur:
+  /// Photo Asli → [CROP 1: Remove Background] → Struk Clean
+  ///           → [CROP 2: Extract Total Box] → Total Area Only
+  ///           → OCR (akurat!)
   Future<Uint8List?> cropReceiptBody(String imagePath) async {
     try {
-      // 1. Baca file gambar dari storage lokal HP menjadi Matriks OpenCV (Mat)
+      // 1. Baca file gambar
       cv.Mat img = cv.imread(imagePath);
       if (img.isEmpty) return null;
 
-      // 2. Jalankan Tahap 1: Eliminasi Background Meja & Meluruskan Perspektif
-      cv.Mat fullReceipt = _extractFullReceipt(img);
+      print("\n🚀 ═══════════════════════════════════════════");
+      print("📸 CROPPING PIPELINE DIMULAI");
+      print("═══════════════════════════════════════════\n");
 
-      // 3. Jalankan Tahap 2: FOKUS KE AREA TOTAL/SUBTOTAL SAJA (bukan body penuh)
-      cv.Mat receiptTotal = _segmentTotalArea(fullReceipt);
+      // 2️⃣ CROP 1: Extract struk bersih dari background meja
+      print("▶️  TAHAP 1: Crop Background (Ambil Struk Bersih)");
+      cv.Mat cleanReceipt = _cropReceiptFromBackground(img);
+      print("✅ Struk bersih siap\n");
 
-      // 4. Konversi Matriks OpenCV (.jpg) ke format bytes agar bisa dipahami Flutter UI & ML Kit
-      final (_, bytes) = cv.imencode(".jpg", receiptTotal);
+      // 3️⃣ CROP 2: Extract hanya area TOTAL dari struk yang sudah clean
+      print("▶️  TAHAP 2: Crop Area Total (Dari Struk Clean)");
+      cv.Mat totalBox = _cropTotalBoxFromReceipt(cleanReceipt);
+      print("✅ Total Box siap\n");
+
+      // 4. Konversi ke bytes
+      final (_, bytes) = cv.imencode(".jpg", totalBox);
       
-      // PENTING: Bebaskan memori native C++ agar HP tidak mengalami memory leak / lag
+      // 5. Cleanup memori
       img.dispose();
-      fullReceipt.dispose();
-      receiptTotal.dispose();
+      cleanReceipt.dispose();
+      totalBox.dispose();
+
+      print("🎉 ═══════════════════════════════════════════");
+      print("✅ CROPPING SELESAI - SIAP KE OCR");
+      print("═══════════════════════════════════════════\n");
 
       return Uint8List.fromList(bytes);
     } catch (e) {
@@ -32,14 +49,31 @@ class OpenCVService {
     }
   }
 
-  /// TAHAP 1: Logika pencarian kontur kertas struk dan pelurusan sudut
-  cv.Mat _extractFullReceipt(cv.Mat img) {
-    final gray = cv.cvtColor(img, cv.COLOR_BGR2GRAY);
-    final blurred = cv.gaussianBlur(gray, (5, 5), 0);
-    final edged = cv.canny(blurred, 75, 200);
+  // ╔════════════════════════════════════════════════════════════════════════╗
+  // ║           CROP 1: EXTRACT STRUK DARI BACKGROUND MEJA                  ║
+  // ╚════════════════════════════════════════════════════════════════════════╝
 
+  /// CROP 1: Deteksi kertas struk, luruskan perspektif, crop ketat ke batas kertas
+  /// Output: Struk bersih tanpa background meja
+  cv.Mat _cropReceiptFromBackground(cv.Mat originalImg) {
+    int origH = originalImg.rows;
+    int origW = originalImg.cols;
+    print("  📐 Original image: ${origW}x$origH");
+
+    // Step 1: Deteksi edge kertas
+    final gray = cv.cvtColor(originalImg, cv.COLOR_BGR2GRAY);
+    final blurred = cv.gaussianBlur(gray, (5, 5), 0);
+    final edged = cv.canny(blurred, 50, 150); // Canny edge detection
+
+    // Step 2: Cari kontur (outline kertas)
     final (contours, _) = cv.findContours(edged, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
     
+    if (contours.isEmpty) {
+      print("  ⚠️  Kontur tidak terdeteksi, return gambar asli");
+      return originalImg.clone();
+    }
+
+    // Step 3: Cari kontur terbesar (kertas struk)
     final sortedContours = contours.toList();
     sortedContours.sort((a, b) => cv.contourArea(b).compareTo(cv.contourArea(a)));
 
@@ -51,144 +85,159 @@ class OpenCVService {
       double peri = cv.arcLength(c, true);
       final approx = cv.approxPolyDP(c, 0.02 * peri, true);
 
+      // Kertas harus 4 sisi (persegi panjang)
       if (approx.length == 4) {
         receiptContour = approx;
         break;
       }
     }
 
-    if (receiptContour != null) {
-      return _fourPointTransform(img, receiptContour.toList());
+    if (receiptContour == null) {
+      print("  ⚠️  Kertas 4-sisi tidak terdeteksi, return gambar asli");
+      return originalImg.clone();
     }
-    
-    return img.clone(); // Fallback jika gagal mendeteksi kertas struk
+
+    // Step 4: Lakukan perspektif transform (luruskan kertas miring)
+    final warpedReceipt = _fourPointTransform(originalImg, receiptContour.toList());
+    print("  ✅ Kertas terdeteksi & perspektif diluruskan: ${warpedReceipt.cols}x${warpedReceipt.rows}");
+
+    // Step 5: CROP KETAT ke area teks saja (remove white border)
+    final croppedStruk = _removeWhiteBorder(warpedReceipt);
+    print("  ✅ White border dihapus: ${croppedStruk.cols}x${croppedStruk.rows}");
+
+    return croppedStruk;
   }
 
-  /// TAHAP 2: Deteksi dan potong HANYA area TOTAL/SUBTOTAL (Optimized)
-  /// Strategi: Cari garis horizontal terbawah, kemudian crop dari area di atasnya sampai bawah
-  cv.Mat _segmentTotalArea(cv.Mat warpedImg) {
-    int h = warpedImg.rows;
-    int w = warpedImg.cols;
+  /// Helper: Hapus white border dari edge image (crop to content)
+  cv.Mat _removeWhiteBorder(cv.Mat img) {
+    int h = img.rows;
+    int w = img.cols;
 
-    print("📐 Image size: ${w}x$h");
-
-    final gray = cv.cvtColor(warpedImg, cv.COLOR_BGR2GRAY);
-    final blur = cv.gaussianBlur(gray, (3, 3), 0);
+    final gray = cv.cvtColor(img, cv.COLOR_BGR2GRAY);
     
-    // Threshold untuk deteksi text/garis dengan jelas
-    final thresh = cv.threshold(blur, 0, 255, cv.THRESH_BINARY_INV + cv.THRESH_OTSU).$2;
+    // Threshold: text hitam = 0, background putih = 255
+    // Gunakan BINARY_INV agar text menjadi white (255) untuk findContours
+    final binInv = cv.threshold(gray, 200, 255, cv.THRESH_BINARY_INV).$2;
 
-    // ══════════════════════════════════════════════════════════════════════
-    // TAHAP 1: Deteksi garis horizontal menggunakan morphology
-    // ══════════════════════════════════════════════════════════════════════
-    int kernelWidth = (w * 0.6).toInt(); // 60% lebar untuk mendeteksi garis pemisah
-    final kernelH = cv.getStructuringElement(cv.MORPH_RECT, (kernelWidth, 2));
-    final lines = cv.morphologyEx(thresh, cv.MORPH_OPEN, kernelH, iterations: 1);
+    // Cari kontur (area teks yang ter-invert menjadi white)
+    final (contours, _) = cv.findContours(binInv, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
 
-    final (cnts, _) = cv.findContours(lines, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
-    
-    if (cnts.isEmpty) {
-      print("⚠️  Tidak ada garis terdeteksi, gunakan default crop");
-      return _fallbackTotalCrop(warpedImg);
+    if (contours.isEmpty) {
+      print("    ⚠️  Content tidak terdeteksi");
+      return img.clone();
     }
 
-    // Ambil Y koordinat semua garis, urutkan dari atas ke bawah
+    // Cari bounding box terbesar (area teks)
+    cv.Rect maxRect = cv.boundingRect(contours[0]);
+    for (final c in contours) {
+      final r = cv.boundingRect(c);
+      int area1 = maxRect.width * maxRect.height;
+      int area2 = r.width * r.height;
+      if (area2 > area1) maxRect = r;
+    }
+
+    // Tambah padding kecil
+    int padX = math.max(5, (maxRect.width * 0.02).toInt());
+    int padY = math.max(5, (maxRect.height * 0.02).toInt());
+
+    int x1 = math.max(0, maxRect.x - padX);
+    int y1 = math.max(0, maxRect.y - padY);
+    int x2 = math.min(w, maxRect.x + maxRect.width + padX);
+    int y2 = math.min(h, maxRect.y + maxRect.height + padY);
+
+    final cropRect = cv.Rect(x1, y1, x2 - x1, y2 - y1);
+    return img.region(cropRect);
+  }
+
+  // ╔════════════════════════════════════════════════════════════════════════╗
+  // ║        CROP 2: EXTRACT TOTAL BOX DARI STRUK YANG SUDAH CLEAN          ║
+  // ╚════════════════════════════════════════════════════════════════════════╝
+
+  /// CROP 2: Dari struk clean, cari & potong hanya area TOTAL saja
+  /// Output: Box total/subtotal yang siap OCR
+  cv.Mat _cropTotalBoxFromReceipt(cv.Mat cleanReceipt) {
+    int h = cleanReceipt.rows;
+    int w = cleanReceipt.cols;
+    print("  📐 Clean receipt size: ${w}x$h");
+
+    final gray = cv.cvtColor(cleanReceipt, cv.COLOR_BGR2GRAY);
+    final blur = cv.gaussianBlur(gray, (3, 3), 0);
+    
+    // Binary threshold
+    final thresh = cv.threshold(blur, 0, 255, cv.THRESH_BINARY_INV + cv.THRESH_OTSU).$2;
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // STRATEGI: Deteksi garis horizontal panjang (pemisah items dari total)
+    // ═══════════════════════════════════════════════════════════════════════
+    
+    int kernelWidth = (w * 0.7).toInt(); // Cari garis 70% lebar
+    final kernel = cv.getStructuringElement(cv.MORPH_RECT, (kernelWidth, 2));
+    final linesMat = cv.morphologyEx(thresh, cv.MORPH_OPEN, kernel, iterations: 1);
+
+    final (cnts, _) = cv.findContours(linesMat, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+    
+    if (cnts.isEmpty) {
+      print("  ⚠️  Garis pemisah tidak terdeteksi");
+      return _fallbackTotalCrop(cleanReceipt);
+    }
+
+    // Filter garis horizontal yang cukup panjang
     List<cv.Rect> lineRects = cnts
         .map((c) => cv.boundingRect(c))
-        .where((r) => r.width > (w * 0.3)) // Filter: lebar minimal 30%
+        .where((r) => r.width > (w * 0.4)) // Lebar minimal 40%
         .toList();
 
     if (lineRects.isEmpty) {
-      print("⚠️  Tidak ada garis panjang terdeteksi");
-      return _fallbackTotalCrop(warpedImg);
+      print("  ⚠️  Garis panjang tidak ditemukan");
+      return _fallbackTotalCrop(cleanReceipt);
     }
 
-    // Urutkan berdasarkan Y (dari atas ke bawah)
+    // Urutkan Y dari atas ke bawah
     lineRects.sort((a, b) => a.y.compareTo(b.y));
 
-    // ══════════════════════════════════════════════════════════════════════
-    // TAHAP 2: Cari area total (biasanya setelah garis terakhir)
-    // ══════════════════════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════════════════════════════
+    // LOGIKA: Total biasanya SETELAH garis pemisah terakhir
+    // ═══════════════════════════════════════════════════════════════════════
     
-    // Garis terbawah dianggap sebagai pemisah sebelum total
     int lastLineY = lineRects.last.y;
-    print("🔍 Last line detected at Y = $lastLineY");
+    print("  🔍 Garis pemisah terakhir di Y = $lastLineY");
 
-    // Crop dari sedikit SEBELUM garis terakhir sampai akhir image
-    int paddingTop = 30; // Margin dari garis untuk include separator
-    int yStart = math.max(0, lastLineY - paddingTop);
+    // Crop dari garis → sampai bawah image
+    int yStart = lastLineY;
+    int yEnd = h;
+    int cropHeight = yEnd - yStart;
+
+    // Validasi: area minimal 5% dari tinggi struk
+    if (cropHeight < (h * 0.05)) {
+      print("  ⚠️  Area terlalu kecil (${cropHeight}px)");
+      return _fallbackTotalCrop(cleanReceipt);
+    }
+
+    print("  ✂️ CROP TOTAL: Y=$yStart sampai Y=$yEnd (tinggi=$cropHeight)");
+
+    final cropRect = cv.Rect(0, yStart, w, cropHeight);
+    final totalBox = cleanReceipt.region(cropRect);
+
+    return totalBox;
+  }
+
+  /// FALLBACK: Jika garis tidak terdeteksi, gunakan bottom 25%
+  cv.Mat _fallbackTotalCrop(cv.Mat img) {
+    int h = img.rows;
+    int w = img.cols;
+
+    int yStart = (h * 0.75).toInt(); // Bottom 25%
     int yEnd = h;
 
-    // Validasi: area minimal 10% dari tinggi image
-    if ((yEnd - yStart) < (h * 0.1)) {
-      print("⚠️  Area terlalu kecil, gunakan default crop");
-      return _fallbackTotalCrop(warpedImg);
-    }
-
-    print("✂️ CROP dari Y=$yStart sampai Y=$yEnd (tinggi=${yEnd - yStart})");
+    print("  🔄 FALLBACK: Crop bottom 25% (Y=$yStart sampai Y=$yEnd)");
 
     final cropRect = cv.Rect(0, yStart, w, yEnd - yStart);
-    return warpedImg.region(cropRect);
+    return img.region(cropRect);
   }
 
-  /// FALLBACK: Jika deteksi garis gagal, gunakan heuristic area bottom 30%
-  cv.Mat _fallbackTotalCrop(cv.Mat warpedImg) {
-    int h = warpedImg.rows;
-    int w = warpedImg.cols;
-
-    // Asumsikan total area ada di bottom 30% image
-    int yStart = (h * 0.7).toInt();
-    int yEnd = h;
-
-    print("🔄 FALLBACK: Crop area bottom 30% (Y=$yStart sampai Y=$yEnd)");
-
-    final cropRect = cv.Rect(0, yStart, w, yEnd - yStart);
-    return warpedImg.region(cropRect);
-  }
-
-  /// TAHAP 2 (LAMA): Logika segmentasi morfologi untuk memisahkan bodi dari header & footer
-  cv.Mat _segmentReceiptBody(cv.Mat warpedImg) {
-    int h = warpedImg.rows;
-    int w = warpedImg.cols;
-
-    final gray = cv.cvtColor(warpedImg, cv.COLOR_BGR2GRAY);
-    final thresh = cv.threshold(gray, 0, 255, cv.THRESH_BINARY_INV + cv.THRESH_OTSU).$2;
-
-    // Deteksi garis horizontal minimal sepanjang 40% dari lebar struk
-    int kernelWidth = (w * 0.4).toInt();
-    final kernel = cv.getStructuringElement(cv.MORPH_RECT, (kernelWidth, 1));
-    final detectHorizontal = cv.morphologyEx(thresh, cv.MORPH_OPEN, kernel, iterations: 2);
-
-    final (cnts, _) = cv.findContours(detectHorizontal, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
-    List<int> yCoords = cnts.map((c) => cv.boundingRect(c).y).toList();
-    yCoords.sort();
-
-    // Default crop (25% atas s.d 85% bawah) jika struk polosan tanpa garis tabel
-    int yStart = (h * 0.25).toInt();
-    int yEnd = (h * 0.85).toInt();
-
-    // Pengaman boks kode transaksi (Abaikan garis di area 10% teratas)
-    List<int> validLines = yCoords.where((y) => y > (h * 0.10)).toList();
-
-    if (validLines.length >= 2) {
-      yStart = validLines.first;
-      yEnd = validLines.last + 15; // Padding 15px agar baris total aman tidak terpotong
-    } else if (validLines.length == 1) {
-      if (validLines.first < (h * 0.5)) {
-        yStart = validLines.first;
-      }
-    }
-
-    if (yStart >= yEnd || (yEnd - yStart) < (h * 0.2)) {
-      yStart = (h * 0.25).toInt();
-      yEnd = (h * 0.85).toInt();
-    }
-
-    if (yEnd > h) yEnd = h;
-
-    final cropRect = cv.Rect(0, yStart, w, yEnd - yStart);
-    return warpedImg.region(cropRect);
-  }
+  // ╔════════════════════════════════════════════════════════════════════════╗
+  // ║                    HELPER FUNCTIONS                                   ║
+  // ╚════════════════════════════════════════════════════════════════════════╝
 
   /// Helper: Transformasi perspektif matriks gambar
   cv.Mat _fourPointTransform(cv.Mat image, List<cv.Point> pts) {
