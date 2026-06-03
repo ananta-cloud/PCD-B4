@@ -114,12 +114,16 @@ class _ScanScreenState extends State<ScanScreen> with TickerProviderStateMixin {
         final tempFile = File(tempPath);
         await tempFile.writeAsBytes(croppedBytes, flush: true);
         imageForOcr = tempFile;
+        debugPrint('OCR menggunakan gambar cropped: ${tempFile.path} (bytes=${croppedBytes.length})');
+      } else {
+        debugPrint('OCR fallback menggunakan gambar asli: ${file.path}');
       }
 
       setState(() {
         _processingStep = 'Menjalankan OCR...';
       });
 
+      debugPrint('OCR input file path: ${imageForOcr.path}');
       final result = await OcrService.processImage(imageForOcr);
       if (!mounted) return;
 
