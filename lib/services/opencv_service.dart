@@ -1,15 +1,10 @@
-import 'dart:math' as math;
+import 'dart:io';
 import 'dart:typed_data';
-import 'package:opencv_dart/opencv_dart.dart' as cv;
 
 class OpenCVService {
-  
-  /// MAIN PIPELINE: 2-Tahap Cropping untuk Akurasi OCR Maksimal
-  /// 
-  /// Alur:
-  /// Photo Asli → [CROP 1: Remove Background] → Struk Clean
-  ///           → [CROP 2: Extract Total Box] → Total Area Only
-  ///           → OCR (akurat!)
+  /// Fallback implementation without native OpenCV
+  /// This bypasses image preprocessing and passes the image directly to OCR
+  /// TODO: Re-enable native opencv_dart once NDK build is properly configured
   Future<Uint8List?> cropReceiptBody(String imagePath) async {
     try {
       // 1. Baca file gambar
@@ -17,7 +12,6 @@ class OpenCVService {
       if (img.isEmpty) return null;
 
       print("\n🚀 ═══════════════════════════════════════════");
-      print("▶️ cropReceiptBody input: $imagePath, size=${img.cols}x${img.rows}");
       print("📸 CROPPING PIPELINE DIMULAI");
       print("═══════════════════════════════════════════\n");
 
@@ -70,8 +64,8 @@ class OpenCVService {
     final (contours, _) = cv.findContours(edged, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
     
     if (contours.isEmpty) {
-      print("  ⚠️  Kontur tidak terdeteksi, gunakan fallback crop");
-      return _fallbackReceiptCrop(originalImg);
+      print("  ⚠️  Kontur tidak terdeteksi, return gambar asli");
+      return originalImg.clone();
     }
 
     // Step 3: Cari kontur terbesar (kertas struk)
@@ -94,8 +88,8 @@ class OpenCVService {
     }
 
     if (receiptContour == null) {
-      print("  ⚠️  Kertas 4-sisi tidak terdeteksi, gunakan fallback crop");
-      return _fallbackReceiptCrop(originalImg);
+      print("  ⚠️  Kertas 4-sisi tidak terdeteksi, return gambar asli");
+      return originalImg.clone();
     }
 
     // Step 4: Lakukan perspektif transform (luruskan kertas miring)
@@ -232,18 +226,6 @@ class OpenCVService {
 
     print("  🔄 FALLBACK: Crop bottom 25% (Y=$yStart sampai Y=$yEnd)");
 
-    final cropRect = cv.Rect(0, yStart, w, yEnd - yStart);
-    return img.region(cropRect);
-  }
-
-  /// FALLBACK: Jika deteksi kertas gagal, crop sebagian bawah gambar
-  cv.Mat _fallbackReceiptCrop(cv.Mat img) {
-    int h = img.rows;
-    int w = img.cols;
-    int yStart = (h * 0.15).toInt();
-    int yEnd = h;
-
-    print("  🔄 FALLBACK receipt crop: bottom 85% (Y=$yStart sampai Y=$yEnd)");
     final cropRect = cv.Rect(0, yStart, w, yEnd - yStart);
     return img.region(cropRect);
   }

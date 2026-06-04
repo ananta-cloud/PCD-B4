@@ -1,73 +1,64 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:google_fonts/google_fonts.dart';
+import 'package:camera/camera.dart';
 import 'package:image_picker/image_picker.dart';
-import '../core/app_colors.dart';
-import '../core/app_text_styles.dart';
-import '../models/receipt.dart';
-import 'detail_screen.dart';
-import '../services/image_processing_service.dart';
-import '../services/opencv_service.dart';
-import '../services/ocr_service.dart';
-import '../services/mongo_service.dart';
-import '../repositories/receipt_repository.dart';
-
-enum _ScanPhase { idle, processing, result }
-
-enum _ImageView { original, grayscale, threshold }
+import 'package:google_fonts/google_fonts.dart';
+import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
+import 'crop_screen.dart';
 
 class ScanScreen extends StatefulWidget {
   const ScanScreen({super.key});
+
   @override
   State<ScanScreen> createState() => _ScanScreenState();
 }
 
-class _ScanScreenState extends State<ScanScreen> with TickerProviderStateMixin {
+class _ScanScreenState extends State<ScanScreen>
+    with WidgetsBindingObserver, AutomaticKeepAliveClientMixin {
+  @override
+  bool get wantKeepAlive => true;
+
+  // ── Camera ─────────────────────────────────────────────────────────────
+  CameraController? _cameraCtrl;
+  bool _isCameraReady = false;
+  bool _isCapturing = false;
   final _picker = ImagePicker();
 
-  _ScanPhase _phase = _ScanPhase.idle;
-  _ImageView _imageView = _ImageView.original;
-  String _processingStep = '';
-
-  File? _originalFile;
-  File? _grayscaleFile;
-  File? _thresholdFile;
-  ParsedReceipt? _ocrResult;
-
-  bool _isSaving = false;
-
-  late final AnimationController _pulseCtrl;
-  late final Animation<double> _pulseAnim;
-  late final AnimationController _resultCtrl;
-  late final Animation<double> _resultAnim;
+  // ── Real-time OCR ──────────────────────────────────────────────────────
+  final _textRecognizer = TextRecognizer(script: TextRecognitionScript.latin);
+  Timer? _ocrTimer;
+  bool _isOcrRunning = false;
+  double _confidence = 0.0;       // 0.0 – 1.0
+  int _textBlockCount = 0;        // jumlah blok teks terdeteksi
+  bool _hasTextInFrame = false;   // apakah ada teks di frame
 
   @override
   void initState() {
     super.initState();
-    _pulseCtrl = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 1200),
-    )..repeat(reverse: true);
-    _pulseAnim = Tween<double>(
-      begin: 0.4,
-      end: 1.0,
-    ).animate(CurvedAnimation(parent: _pulseCtrl, curve: Curves.easeInOut));
-    _resultCtrl = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 600),
-    );
-    _resultAnim = Tween<double>(
-      begin: 0.0,
-      end: 1.0,
-    ).animate(CurvedAnimation(parent: _resultCtrl, curve: Curves.elasticOut));
+    WidgetsBinding.instance.addObserver(this);
+    _initCamera();
   }
 
   @override
   void dispose() {
-    _pulseCtrl.dispose();
-    _resultCtrl.dispose();
+    WidgetsBinding.instance.removeObserver(this);
+    _ocrTimer?.cancel();
+    _textRecognizer.close();
+    _cameraCtrl?.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.inactive) {
+      _stopRealtimeOcr();
+      _cameraCtrl?.dispose();
+      if (mounted) setState(() => _isCameraReady = false);
+    } else if (state == AppLifecycleState.resumed && !_isCameraReady) {
+      _initCamera();
+    }
   }
 
   // ── Pick image ──────────────────────────────────────────────────────────
@@ -141,971 +132,653 @@ class _ScanScreenState extends State<ScanScreen> with TickerProviderStateMixin {
     }
   }
 
-  // ── Save receipt ────────────────────────────────────────────────────────
-  void _saveReceipt() async {
-    if (_isSaving || _ocrResult == null) return;
-    setState(() => _isSaving = true);
+  // ── Camera init ────────────────────────────────────────────────────────
 
-    // Asumsi toko dari hasil OCR, jika kosong fallback ke 'Scanned Receipt'
-    final merchantName = 'Scanned Receipt';
-    final totalAmount = _ocrResult!.total;
+  Future<void> _initCamera() async {
+    try {
+      final cameras = await availableCameras();
+      if (cameras.isEmpty || !mounted) return;
 
-    // Simpan ke Hive database
-    bool success = false;
-    late Receipt savedReceipt;
+      final camera = cameras.firstWhere(
+        (c) => c.lensDirection == CameraLensDirection.back,
+        orElse: () => cameras[0],
+      );
+
+      final ctrl = CameraController(
+        camera,
+        ResolutionPreset.medium, // medium cukup untuk OCR, hemat baterai
+        enableAudio: false,
+        imageFormatGroup: ImageFormatGroup.jpeg,
+      );
+
+      await ctrl.initialize();
+      // Pastikan flash mati — tidak auto-nyala meski gelap
+      await ctrl.setFlashMode(FlashMode.off);
+      // Aktifkan continuous auto-focus agar selalu tajam
+      await ctrl.setFocusMode(FocusMode.auto);
+      if (!mounted) return;
+
+      _cameraCtrl = ctrl;
+      setState(() => _isCameraReady = true);
+
+      // Mulai real-time OCR setelah kamera siap
+      _startRealtimeOcr();
+    } catch (e) {
+      debugPrint('❌ Camera init error: $e');
+    }
+  }
+
+  // ── Real-time OCR (tiap 1.5 detik) ────────────────────────────────────
+
+  void _startRealtimeOcr() {
+    _ocrTimer?.cancel();
+    // Interval 2.5 detik — cukup untuk OCR + kamera re-focus sebelum frame berikutnya
+    _ocrTimer = Timer.periodic(const Duration(milliseconds: 2500), (_) {
+      _runOcrOnFrame();
+    });
+  }
+
+  void _stopRealtimeOcr() {
+    _ocrTimer?.cancel();
+    _ocrTimer = null;
+  }
+
+  Future<void> _runOcrOnFrame() async {
+    if (_isOcrRunning || _isCapturing) return;
+    if (_cameraCtrl == null || !_cameraCtrl!.value.isInitialized) return;
+
+    _isOcrRunning = true;
+    String? tempPath;
+    try {
+      // Gunakan takePicture tapi dengan resolusi medium agar tidak ganggu AF
+      final xfile = await _cameraCtrl!.takePicture();
+      tempPath = xfile.path;
+      final inputImage = InputImage.fromFilePath(tempPath);
+      final result = await _textRecognizer.processImage(inputImage);
+
+      final confidence = _computeConfidence(result);
+      final blockCount = result.blocks.length;
+
+      if (mounted) {
+        setState(() {
+          _confidence = confidence;
+          _textBlockCount = blockCount;
+          _hasTextInFrame = blockCount > 0;
+        });
+      }
+    } catch (_) {
+      // Skip frame ini
+    } finally {
+      // Hapus temp file
+      if (tempPath != null) {
+        try { File(tempPath).deleteSync(); } catch (_) {}
+      }
+      // Trigger re-focus setelah OCR selesai
+      try {
+        if (_cameraCtrl != null && _cameraCtrl!.value.isInitialized) {
+          await _cameraCtrl!.setFocusMode(FocusMode.auto);
+        }
+      } catch (_) {}
+      _isOcrRunning = false;
+    }
+  }
+
+  /// Hitung confidence 0.0–1.0 dari RecognizedText
+  double _computeConfidence(RecognizedText text) {
+    if (text.blocks.isEmpty) return 0.0;
+
+    double total = 0;
+    int count = 0;
+    for (final block in text.blocks) {
+      for (final line in block.lines) {
+        for (final el in line.elements) {
+          final c = el.confidence;
+          if (c != null) {
+            total += c;
+            count++;
+          }
+        }
+      }
+    }
+
+    if (count > 0) return (total / count).clamp(0.0, 1.0);
+
+    // Fallback: estimasi dari jumlah karakter terbaca
+    final charCount = text.text.length;
+    return (charCount / 200.0).clamp(0.0, 1.0);
+  }
+
+  // ── Capture ────────────────────────────────────────────────────────────
+
+  Future<void> _captureImage() async {
+    if (!_isCameraReady || _isCapturing || _cameraCtrl == null) return;
+
+    setState(() => _isCapturing = true);
+    HapticFeedback.mediumImpact();
+    _stopRealtimeOcr(); // pause OCR saat capturing
 
     try {
-      // Generate unique receipt ID
-      final receiptId = 'receipt_${DateTime.now().millisecondsSinceEpoch}';
+      final image = await _cameraCtrl!.takePicture();
+      if (!mounted) return;
 
-      // Ambil userId dari sesi login MongoDB
-      final userId = MongoService.currentUserId ?? 'unknown_user';
-
-      // Create Receipt object
-      final receipt = Receipt(
-        id: receiptId,
-        userId: userId,
-        totalAmount: totalAmount,
-        confidenceScore: 0.85,
-        scannedAt: DateTime.now(),
-        isSynced: false,
-        merchantName: merchantName,
-        imagePath: null,
+      await Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => CropScreen(imageFile: File(image.path)),
+        ),
       );
-
-      // Save to Hive (local)
-      await ReceiptRepository.addReceipt(receipt);
-
-      // Auto-sync ke MongoDB jika ada koneksi
-      try {
-        final synced = await MongoService.insertReceipt(
-          merchantName,
-          totalAmount,
-        );
-        if (synced) {
-          await ReceiptRepository.markAsSynced([receiptId]);
-        }
-      } catch (_) {
-        // Gagal sync ke MongoDB — tetap tersimpan lokal, akan sync nanti
-      }
-
-      savedReceipt = receipt;
-      success = true;
     } catch (e) {
-      print('Error saving receipt: $e');
-      success = false;
-    }
-
-    HapticFeedback.heavyImpact();
-    if (!mounted) return;
-    setState(() {
-      _isSaving = false;
-    });
-
-    if (success) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Row(
-            children: [
-              const Icon(Icons.check_circle, color: AppColors.secondary),
-              const SizedBox(width: 8),
-              Text(
-                'Struk tersimpan!',
-                style: GoogleFonts.inter(color: AppColors.onSurface),
-              ),
-            ],
-          ),
-          backgroundColor: AppColors.surfaceContainerHigh,
-          behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
-          ),
-        ),
-      );
-
-      // Reset status scanner agar saat kembali, tampilan siap memindai lagi
-      _resetScan();
-
-      // Arahkan ke halaman DetailScreen dengan Receipt object
+      debugPrint('❌ Capture error: $e');
       if (mounted) {
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (context) => DetailScreen(receipt: savedReceipt),
-          ),
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Gagal mengambil foto: $e')),
         );
       }
-    } else {
-      _showError('Gagal menyimpan ke database. Pastikan Anda sudah login.');
+    } finally {
+      if (mounted) {
+        setState(() => _isCapturing = false);
+        _startRealtimeOcr(); // resume OCR
+      }
     }
   }
 
-  void _resetScan() {
-    _resultCtrl.reset();
-    setState(() {
-      _phase = _ScanPhase.idle;
-      _originalFile = null;
-      _grayscaleFile = null;
-      _thresholdFile = null;
-      _ocrResult = null;
-      _imageView = _ImageView.original;
-    });
+  Future<void> _pickFromGallery() async {
+    _stopRealtimeOcr();
+    final picked = await _picker.pickImage(
+      source: ImageSource.gallery,
+      imageQuality: 90,
+    );
+    if (!mounted) {
+      _startRealtimeOcr();
+      return;
+    }
+    if (picked == null) {
+      _startRealtimeOcr();
+      return;
+    }
+    await Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => CropScreen(imageFile: File(picked.path))),
+    );
+    if (mounted) _startRealtimeOcr();
   }
 
-  void _showError(String msg) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          msg,
-          style: GoogleFonts.inter(color: AppColors.onErrorContainer),
-        ),
-        backgroundColor: AppColors.errorContainer,
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      ),
+  // ── Build ──────────────────────────────────────────────────────────────
+
+  @override
+  Widget build(BuildContext context) {
+    super.build(context);
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: _isCameraReady && _cameraCtrl != null
+          ? _buildLiveView()
+          : _buildLoading(),
     );
   }
 
-  // ── Helpers ─────────────────────────────────────────────────────────────
-  bool get _isDetected =>
-      _phase == _ScanPhase.result && (_ocrResult?.confidence ?? 0) > 0.75;
-  bool get _hasItems => _ocrResult != null && _ocrResult!.items.isNotEmpty;
-
-  File? get _displayedImage {
-    return switch (_imageView) {
-      _ImageView.original => _originalFile,
-      _ImageView.grayscale => _grayscaleFile,
-      _ImageView.threshold => _thresholdFile,
-    };
-  }
-
-  String _formatAmount(double amount) {
-    final f = amount
-        .toStringAsFixed(0)
-        .replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (m) => '.');
-    return 'Rp $f';
-  }
-
-  // ── Build ───────────────────────────────────────────────────────────────
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      resizeToAvoidBottomInset: false, // Mencegah UI tergencet oleh keyboard
-      backgroundColor: Colors.black,
-      body: Stack(
-        fit: StackFit.expand,
+  Widget _buildLoading() {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          // Background
-          AnimatedContainer(
-            duration: const Duration(milliseconds: 800),
-            color: _isDetected
-                ? const Color(0xFF001A0A)
-                : const Color(0xFF080A12),
-            child: CustomPaint(painter: _GridPainter(isDetected: _isDetected)),
-          ),
-          // Gradient overlay
-          Container(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: [
-                  Colors.black.withValues(alpha: 0.55),
-                  Colors.transparent,
-                  Colors.transparent,
-                  Colors.black.withValues(alpha: 0.75),
-                ],
-                stops: const [0, 0.2, 0.65, 1],
-              ),
+          const SizedBox(
+            width: 40,
+            height: 40,
+            child: CircularProgressIndicator(
+              strokeWidth: 2,
+              color: Colors.white38,
             ),
           ),
-          // Top bar
-          SafeArea(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                _buildTopBar(),
-                const SizedBox(height: 12),
-                Center(child: _buildStatusBadge()),
-              ],
-            ),
+          const SizedBox(height: 16),
+          Text(
+            'Memulai kamera...',
+            style: GoogleFonts.inter(color: Colors.white38, fontSize: 14),
           ),
-          // Center image area
-          Positioned(
-            left: 36,
-            top: 160,
-            right: 36,
-            bottom: 260,
-            child: _buildImageArea(),
-          ),
-          // Image view tabs (result only)
-          if (_phase == _ScanPhase.result)
-            Positioned(
-              left: 36,
-              right: 36,
-              bottom: 230,
-              child: _buildImageTabs(),
-            ),
-          // Bottom panel
-          Align(alignment: Alignment.bottomCenter, child: _buildBottomPanel()),
         ],
       ),
     );
   }
 
-  // ── Top Bar ─────────────────────────────────────────────────────────────
+  Widget _buildLiveView() {
+    // Gunakan SafeArea untuk seluruh konten UI, tapi biarkan kamera full bleed
+    final topPadding = MediaQuery.of(context).padding.top;
+
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        // ── 1. Camera preview — full bleed, tidak distorsi ──
+        _buildPreview(),
+
+        // ── 2. Vignette gradient ──
+        _buildVignette(),
+
+        // ── 3. Guide overlay ──
+        LayoutBuilder(
+          builder: (_, constraints) => CustomPaint(
+            painter: _ScanGuidePainter(
+              screenSize: Size(constraints.maxWidth, constraints.maxHeight),
+              confidence: _confidence,
+              hasText: _hasTextInFrame,
+            ),
+            size: Size(constraints.maxWidth, constraints.maxHeight),
+          ),
+        ),
+
+        // ── 4. Top bar — mulai dari bawah status bar ──
+        Positioned(
+          top: topPadding,
+          left: 0,
+          right: 0,
+          child: _buildTopBar(),
+        ),
+
+        // ── 5. Confidence badge ──
+        _buildConfidenceBadge(),
+
+        // ── 6. Bottom controls ──
+        _buildBottomControls(),
+      ],
+    );
+  }
+
+  // ── Camera preview — full bleed, cover, tidak gepeng ─────────────────
+
+  Widget _buildPreview() {
+    final ctrl = _cameraCtrl!;
+    final previewSize = ctrl.value.previewSize!;
+    // Sensor Android landscape: previewSize.width > previewSize.height
+    // Untuk portrait: aspect ratio portrait = previewSize.width / previewSize.height
+
+    return SizedBox.expand(
+      child: FittedBox(
+        fit: BoxFit.cover,
+        child: SizedBox(
+          // Ukuran "asli" sesuai sensor — FittedBox.cover akan scale agar memenuhi layar
+          width: previewSize.height,   // lebar portrait = tinggi sensor
+          height: previewSize.width,  // tinggi portrait = lebar sensor
+          child: CameraPreview(ctrl),
+        ),
+      ),
+    );
+  }
+
+  // ── Vignette gradient ──────────────────────────────────────────────────
+
+  Widget _buildVignette() {
+    return IgnorePointer(
+      child: Container(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [
+              Colors.black.withValues(alpha: 0.65),
+              Colors.transparent,
+              Colors.transparent,
+              Colors.black.withValues(alpha: 0.70),
+            ],
+            stops: const [0.0, 0.22, 0.65, 1.0],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ── Top bar ────────────────────────────────────────────────────────────
+
   Widget _buildTopBar() {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          _IconBtn(icon: Icons.settings_outlined, onTap: () {}),
-          const Spacer(),
+          // Label
           Text(
             'ReceiptSync',
             style: GoogleFonts.spaceGrotesk(
-              fontSize: 20,
+              fontSize: 15,
               fontWeight: FontWeight.w700,
-              color: AppColors.onSurface,
+              color: Colors.white,
+              letterSpacing: 0.3,
             ),
           ),
-          const Spacer(),
-          _IconBtn(icon: Icons.manage_accounts_outlined, onTap: () {}),
+          // Info blok teks
+          if (_hasTextInFrame)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+              decoration: BoxDecoration(
+                color: Colors.black.withValues(alpha: 0.55),
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: Colors.white.withValues(alpha: 0.18)),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.text_fields_rounded, color: Colors.white60, size: 12),
+                  const SizedBox(width: 4),
+                  Text(
+                    '$_textBlockCount blok teks',
+                    style: GoogleFonts.inter(fontSize: 10, color: Colors.white60),
+                  ),
+                ],
+              ),
+            ),
         ],
       ),
     );
   }
 
-  // ── Status Badge ────────────────────────────────────────────────────────
-  Widget _buildStatusBadge() {
+  // ── Confidence badge ───────────────────────────────────────────────────
+
+  Widget _buildConfidenceBadge() {
+    // Hitung posisi Y: sedikit di atas tengah (sama dengan guide frame)
+    return Positioned(
+      bottom: 130,
+      left: 0,
+      right: 0,
+      child: Center(
+        child: _ConfidencePill(
+          confidence: _confidence,
+          hasText: _hasTextInFrame,
+        ),
+      ),
+    );
+  }
+
+  // ── Bottom controls ────────────────────────────────────────────────────
+
+  Widget _buildBottomControls() {
+    return Positioned(
+      bottom: 28,
+      left: 0,
+      right: 0,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 32),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            // Galeri
+            _CircleIconButton(
+              onTap: _pickFromGallery,
+              size: 54,
+              tooltip: 'Galeri',
+              child: const Icon(Icons.photo_library_outlined, color: Colors.white, size: 24),
+            ),
+
+            // Capture
+            _CaptureButton(isCapturing: _isCapturing, onTap: _captureImage),
+
+            // Placeholder simetri
+            const SizedBox(width: 54, height: 54),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  Guide Overlay Painter
+// ════════════════════════════════════════════════════════════════════════════
+
+class _ScanGuidePainter extends CustomPainter {
+  final Size screenSize;
+  final double confidence;
+  final bool hasText;
+
+  _ScanGuidePainter({
+    required this.screenSize,
+    required this.confidence,
+    required this.hasText,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final w = size.width;
+    final h = size.height;
+
+    // Frame: 86% lebar layar, tinggi proporsional struk (1:1.5)
+    final frameW = w * 0.86;
+    final frameH = frameW * 1.48;
+    final left = (w - frameW) / 2;
+    // Posisi tengah sedikit ke atas (48% height)
+    final top = h * 0.44 - frameH / 2;
+    final right = left + frameW;
+    final bottom = top + frameH;
+    const radius = Radius.circular(16);
+    final rrect = RRect.fromLTRBR(left, top, right, bottom, radius);
+
+    // ── Dark overlay ──
+    final overlay = Path()
+      ..addRect(Rect.fromLTWH(0, 0, w, h))
+      ..addRRect(rrect)
+      ..fillType = PathFillType.evenOdd;
+    canvas.drawPath(overlay, Paint()..color = Colors.black.withValues(alpha: 0.52));
+
+    // ── Border warna sesuai status ──
+    final borderColor = _frameColor();
+    canvas.drawRRect(
+      rrect,
+      Paint()
+        ..color = borderColor.withValues(alpha: 0.6)
+        ..strokeWidth = 1.5
+        ..style = PaintingStyle.stroke,
+    );
+
+    // ── Corner L-shape handles ──
+    const cLen = 28.0;
+    const cW = 4.0;
+    const r = 16.0;
+    final cp = Paint()
+      ..color = borderColor
+      ..strokeWidth = cW
+      ..strokeCap = StrokeCap.round
+      ..style = PaintingStyle.stroke;
+
+    // Top-left
+    canvas.drawLine(Offset(left + r, top), Offset(left + r + cLen, top), cp);
+    canvas.drawLine(Offset(left, top + r), Offset(left, top + r + cLen), cp);
+    // Top-right
+    canvas.drawLine(Offset(right - r, top), Offset(right - r - cLen, top), cp);
+    canvas.drawLine(Offset(right, top + r), Offset(right, top + r + cLen), cp);
+    // Bottom-left
+    canvas.drawLine(Offset(left + r, bottom), Offset(left + r + cLen, bottom), cp);
+    canvas.drawLine(Offset(left, bottom - r), Offset(left, bottom - r - cLen), cp);
+    // Bottom-right
+    canvas.drawLine(Offset(right - r, bottom), Offset(right - r - cLen, bottom), cp);
+    canvas.drawLine(Offset(right, bottom - r), Offset(right, bottom - r - cLen), cp);
+  }
+
+  Color _frameColor() {
+    if (!hasText) return Colors.white;
+    if (confidence >= 0.75) return const Color(0xFF4CAF50); // hijau
+    if (confidence >= 0.45) return const Color(0xFFFFB300); // kuning
+    return Colors.white;
+  }
+
+  @override
+  bool shouldRepaint(_ScanGuidePainter old) =>
+      old.confidence != confidence || old.hasText != hasText;
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  Confidence Pill Widget
+// ════════════════════════════════════════════════════════════════════════════
+
+class _ConfidencePill extends StatelessWidget {
+  final double confidence;
+  final bool hasText;
+
+  const _ConfidencePill({required this.confidence, required this.hasText});
+
+  @override
+  Widget build(BuildContext context) {
+    final pct = (confidence * 100).round();
+
+    // Label & warna berdasarkan kondisi
     final String label;
     final Color color;
     final IconData icon;
 
-    switch (_phase) {
-      case _ScanPhase.idle:
-        label = 'SIAP MEMINDAI';
-        color = AppColors.primary;
-        icon = Icons.camera_alt_outlined;
-      case _ScanPhase.processing:
-        label = 'MEMPROSES...';
-        color = AppColors.syncStatusPending;
-        icon = Icons.hourglass_top_rounded;
-      case _ScanPhase.result:
-        final conf = (_ocrResult?.confidence ?? 0) * 100;
-        label =
-            '${conf.toStringAsFixed(0)}% CONFIDENCE — ${_isDetected ? "VALID" : "LOW"}';
-        color = _isDetected ? AppColors.successGlint : AppColors.error;
-        icon = _isDetected
-            ? Icons.check_circle_outline
-            : Icons.warning_amber_rounded;
+    if (!hasText) {
+      label = 'Arahkan ke struk';
+      color = Colors.white60;
+      icon = Icons.crop_free_rounded;
+    } else if (pct >= 75) {
+      label = 'Siap scan · $pct%';
+      color = const Color(0xFF4CAF50);
+      icon = Icons.check_circle_outline_rounded;
+    } else if (pct >= 45) {
+      label = 'Mendeteksi · $pct%';
+      color = const Color(0xFFFFB300);
+      icon = Icons.radio_button_checked_rounded;
+    } else {
+      label = 'Kualitas rendah · $pct%';
+      color = Colors.redAccent;
+      icon = Icons.warning_amber_rounded;
     }
 
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 400),
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.15),
-        borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: color.withValues(alpha: 0.8), width: 1.5),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, color: color, size: 16),
-          const SizedBox(width: 8),
-          // Flexible mencegah overflow jika resolusi HP sangat kecil
-          Flexible(
-            child: Text(
-              label,
-              style: AppTextStyles.labelCaps(color: color),
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // ── Image Area ──────────────────────────────────────────────────────────
-  Widget _buildImageArea() {
-    switch (_phase) {
-      case _ScanPhase.idle:
-        return _buildIdleGuide();
-      case _ScanPhase.processing:
-        return _buildProcessingView();
-      case _ScanPhase.result:
-        return _buildResultImage();
-    }
-  }
-
-  Widget _buildIdleGuide() {
-    return AnimatedBuilder(
-      animation: _pulseAnim,
-      builder: (context, child) => CustomPaint(
-        painter: _BoundingBoxPainter(
-          color: AppColors.boundingBoxDefault,
-          glowIntensity: _pulseAnim.value,
-          isDetected: false,
-        ),
-        child: Center(
-          // SingleChildScrollView mencegah vertical overflow jika area kamera terlalu pendek
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(
-                  Icons.receipt_long_outlined,
-                  size: 64,
-                  color: AppColors.onSurfaceVariant.withValues(alpha: 0.4),
-                ),
-                const SizedBox(height: 16),
-                Text(
-                  'Arahkan kamera ke struk\natau pilih dari galeri',
-                  textAlign: TextAlign.center,
-                  style: AppTextStyles.bodyMd(
-                    color: AppColors.onSurfaceVariant.withValues(alpha: 0.6),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildProcessingView() {
-    return Stack(
-      children: [
-        // Show original image
-        if (_originalFile != null)
-          ClipRRect(
-            borderRadius: BorderRadius.circular(8),
-            child: Image.file(
-              _originalFile!,
-              fit: BoxFit.cover,
-              width: double.infinity,
-              height: double.infinity,
-            ),
-          ),
-        // Processing overlay
-        Container(
-          decoration: BoxDecoration(
-            color: Colors.black.withValues(alpha: 0.7),
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Center(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const SizedBox(
-                  width: 40,
-                  height: 40,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 3,
-                    color: AppColors.primary,
-                  ),
-                ),
-                const SizedBox(height: 16),
-                Text(
-                  _processingStep,
-                  style: AppTextStyles.label(color: AppColors.primary),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildResultImage() {
-    final file = _displayedImage;
-    if (file == null) return const SizedBox();
-
-    return AnimatedBuilder(
-      animation: _resultAnim,
-      builder: (context, child) => Transform.scale(
-        scale: 0.95 + 0.05 * _resultAnim.value,
-        child: Container(
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(
-              color: _isDetected ? AppColors.successGlint : AppColors.error,
-              width: 2,
-            ),
-            boxShadow: _isDetected
-                ? [
-                    BoxShadow(
-                      color: AppColors.successGlint.withValues(alpha: 0.3),
-                      blurRadius: 16,
-                    ),
-                  ]
-                : null,
-          ),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(6),
-            child: Image.file(
-              file,
-              fit: BoxFit.cover,
-              width: double.infinity,
-              height: double.infinity,
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  // ── Image Tabs ──────────────────────────────────────────────────────────
-  Widget _buildImageTabs() {
-    return Row(
-      children: [
-        _tabButton('Original', _ImageView.original),
-        const SizedBox(width: 6),
-        _tabButton('Grayscale', _ImageView.grayscale),
-        const SizedBox(width: 6),
-        _tabButton('Threshold', _ImageView.threshold),
-      ],
-    );
-  }
-
-  Widget _tabButton(String label, _ImageView view) {
-    final active = _imageView == view;
-    return Expanded(
-      child: GestureDetector(
-        onTap: () => setState(() => _imageView = view),
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 200),
-          padding: const EdgeInsets.symmetric(vertical: 8),
-          decoration: BoxDecoration(
-            color: active
-                ? AppColors.primaryContainer.withValues(alpha: 0.3)
-                : AppColors.surfaceContainerHigh.withValues(alpha: 0.6),
-            borderRadius: BorderRadius.circular(10),
-            border: Border.all(
-              color: active
-                  ? AppColors.primary
-                  : AppColors.outlineVariant.withValues(alpha: 0.5),
-            ),
-          ),
-          child: Text(
-            label,
-            textAlign: TextAlign.center,
-            style: AppTextStyles.labelCaps(
-              color: active ? AppColors.primary : AppColors.onSurfaceVariant,
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  // ── Bottom Panel ────────────────────────────────────────────────────────
-  Widget _buildBottomPanel() {
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 400),
-      margin: const EdgeInsets.only(left: 20, right: 20, bottom: 80),
-      decoration: BoxDecoration(
-        color: AppColors.surfaceContainerHigh.withValues(alpha: 0.95),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(
-          color: _isDetected
-              ? AppColors.successGlint.withValues(alpha: 0.3)
-              : AppColors.outlineVariant,
-        ),
-      ),
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
-      child: _phase == _ScanPhase.idle
-          ? _buildIdleActions()
-          : _phase == _ScanPhase.processing
-          ? _buildProcessingInfo()
-          : _buildResultPanel(),
-    );
-  }
-
-  Widget _buildIdleActions() {
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Text('PILIH SUMBER GAMBAR', style: AppTextStyles.labelCaps()),
-        const SizedBox(height: 14),
-        Row(
-          children: [
-            Expanded(
-              child: _actionButton(
-                Icons.camera_alt_rounded,
-                'Kamera',
-                () => _pickImage(ImageSource.camera),
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: _actionButton(
-                Icons.photo_library_rounded,
-                'Galeri',
-                () => _pickImage(ImageSource.gallery),
-              ),
-            ),
-          ],
-        ),
-      ],
-    );
-  }
-
-  Widget _actionButton(IconData icon, String label, VoidCallback onTap) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 4),
-        decoration: BoxDecoration(
-          color: AppColors.primaryContainer,
-          borderRadius: BorderRadius.circular(14),
-        ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(icon, color: AppColors.onPrimaryContainer, size: 20),
-            const SizedBox(width: 8),
-            // Flexible mencegah teks 'Kamera'/'Galeri' kepotong di layar sempit
-            Flexible(
-              child: Text(
+        // Pill label
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+          decoration: BoxDecoration(
+            color: Colors.black.withValues(alpha: 0.6),
+            borderRadius: BorderRadius.circular(24),
+            border: Border.all(color: color.withValues(alpha: 0.5), width: 1.2),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, color: color, size: 14),
+              const SizedBox(width: 7),
+              Text(
                 label,
-                overflow: TextOverflow.ellipsis,
-                style: GoogleFonts.spaceGrotesk(
-                  fontSize: 15,
-                  fontWeight: FontWeight.w700,
-                  color: AppColors.onPrimaryContainer,
+                style: GoogleFonts.inter(
+                  fontSize: 12,
+                  color: color,
+                  fontWeight: FontWeight.w600,
                 ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
-      ),
-    );
-  }
 
-  Widget _buildProcessingInfo() {
-    return Row(
-      mainAxisSize: MainAxisSize.max,
-      children: [
-        // mainAxisSize diubah jadi max agar cocok dengan Flexible
-        const SizedBox(
-          width: 20,
-          height: 20,
-          child: CircularProgressIndicator(
-            strokeWidth: 2,
-            color: AppColors.primary,
+        // Progress bar (hanya tampil kalau ada teks)
+        if (hasText) ...[
+          const SizedBox(height: 8),
+          SizedBox(
+            width: 180,
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(99),
+              child: LinearProgressIndicator(
+                value: confidence.clamp(0.0, 1.0),
+                minHeight: 4,
+                backgroundColor: Colors.white.withValues(alpha: 0.15),
+                valueColor: AlwaysStoppedAnimation<Color>(color),
+              ),
+            ),
           ),
-        ),
-        const SizedBox(width: 12),
-        // Diubah dari Expanded ke Flexible untuk menghindari bentrok dengan constraints min
-        Flexible(
-          child: Text(
-            _processingStep,
-            style: AppTextStyles.bodyMd(color: AppColors.onSurface),
-          ),
-        ),
+        ],
       ],
-    );
-  }
-
-  Widget _buildResultPanel() {
-    final result = _ocrResult;
-    if (result == null) return const SizedBox();
-
-    return ConstrainedBox(
-      constraints: const BoxConstraints(maxHeight: 360),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          // Scrollable receipt content
-          Flexible(
-            child: SingleChildScrollView(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // ── Items ──
-                  if (_hasItems) ...[
-                    Text('ITEM BELANJA', style: AppTextStyles.labelCaps()),
-                    const SizedBox(height: 6), // Jarak diperkecil
-                    ...result.items.map(
-                      (item) => Padding(
-                        padding: const EdgeInsets.only(
-                          bottom: 8,
-                        ), // Jarak antar item diperkecil
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            // BARIS 1: Nama Item & Total Harga
-                            Row(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Expanded(
-                                  child: Text(
-                                    item.name,
-                                    // Ukuran font diperkecil (misal jadi 13)
-                                    style: AppTextStyles.bodyMd(
-                                      color: AppColors.onSurface,
-                                    ).copyWith(fontSize: 13, height: 1.2),
-                                  ),
-                                ),
-                                const SizedBox(width: 8),
-                                Text(
-                                  _formatAmount(item.totalPrice),
-                                  // Ukuran font harga disamakan dan ditebalkan
-                                  style:
-                                      AppTextStyles.bodyMd(
-                                        color: AppColors.onSurface,
-                                      ).copyWith(
-                                        fontSize: 13,
-                                        fontWeight: FontWeight.w700,
-                                      ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 2),
-
-                            // BARIS 2: Kuantitas (Quantity)
-                            Text(
-                              '${item.qty} x ${_formatAmount(item.unitPrice)}',
-                              // Ukuran font label (quantity) diperkecil jadi 11
-                              style: AppTextStyles.label(
-                                color: AppColors.onSurfaceVariant,
-                              ).copyWith(fontSize: 11),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                    Divider(
-                      color: AppColors.outlineVariant.withValues(alpha: 0.5),
-                      height: 16,
-                    ),
-                  ],
-                  // ── Subtotal ──
-                  if (result.subtotal > 0)
-                    _summaryRow('Subtotal', _formatAmount(result.subtotal)),
-                  // ── Total ──
-                  _summaryRow(
-                    'TOTAL',
-                    result.isValid
-                        ? _formatAmount(result.total)
-                        : 'Tidak ditemukan',
-                    isBold: true,
-                    color: result.isValid
-                        ? AppColors.onSurface
-                        : AppColors.error,
-                  ),
-                  // ── Cash & Change ──
-                  if (result.hasCashPayment) ...[
-                    Divider(
-                      color: AppColors.outlineVariant.withValues(alpha: 0.5),
-                      height: 16,
-                    ),
-                    _summaryRow('Tunai', _formatAmount(result.cash!)),
-                    if (result.change != null && result.change! > 0)
-                      _summaryRow('Kembali', _formatAmount(result.change!)),
-                  ],
-                  // ── OCR raw text link ──
-                  if (result.rawText.isNotEmpty) ...[
-                    const SizedBox(height: 10),
-                    GestureDetector(
-                      onTap: () => _showOcrDetail(result.rawText),
-                      child: Row(
-                        children: [
-                          const Icon(
-                            Icons.article_outlined,
-                            size: 14,
-                            color: AppColors.primary,
-                          ),
-                          const SizedBox(width: 6),
-                          Text(
-                            'Lihat teks OCR lengkap',
-                            style: AppTextStyles.label(
-                              color: AppColors.primary,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                  if (!_hasItems && !result.isValid) ...[
-                    const SizedBox(height: 8),
-                    Text(
-                      'Tidak ada item terdeteksi.\nCoba foto ulang dengan pencahayaan lebih baik.',
-                      style: AppTextStyles.bodyMd(
-                        color: AppColors.onSurfaceVariant,
-                      ),
-                    ),
-                  ],
-                ],
-              ),
-            ),
-          ),
-          // ── Action buttons ──
-          const SizedBox(height: 14),
-          Row(
-            children: [
-              Expanded(
-                child: ElevatedButton.icon(
-                  onPressed: _isSaving ? null : _saveReceipt,
-                  icon: _isSaving
-                      ? const SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: AppColors.onSecondaryContainer,
-                          ),
-                        )
-                      : const Icon(Icons.save_alt_rounded, size: 18),
-                  label: Text(
-                    _isSaving ? 'Menyimpan...' : 'Simpan',
-                    style: GoogleFonts.spaceGrotesk(
-                      fontWeight: FontWeight.w600,
-                      fontSize: 14,
-                    ),
-                  ),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppColors.secondaryContainer,
-                    foregroundColor: AppColors.onSecondaryContainer,
-                    padding: const EdgeInsets.symmetric(vertical: 14),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(14),
-                    ),
-                    elevation: 0,
-                  ),
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: _resetScan,
-                  icon: const Icon(Icons.refresh_rounded, size: 18),
-                  label: Text(
-                    'Scan Lagi',
-                    style: GoogleFonts.spaceGrotesk(
-                      fontWeight: FontWeight.w600,
-                      fontSize: 14,
-                    ),
-                  ),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: AppColors.onSurface,
-                    side: const BorderSide(color: AppColors.outlineVariant),
-                    padding: const EdgeInsets.symmetric(vertical: 14),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(14),
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _summaryRow(
-    String label,
-    String value, {
-    bool isBold = false,
-    Color? color,
-  }) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 3),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment
-            .start, // Pastikan rata atas jika teks turun baris
-        children: [
-          Expanded(
-            child: Text(
-              label,
-              style: isBold
-                  ? AppTextStyles.bodyLg(
-                      color: color ?? AppColors.onSurface,
-                    ).copyWith(fontWeight: FontWeight.w700)
-                  : AppTextStyles.bodyMd(color: AppColors.onSurfaceVariant),
-            ),
-          ),
-          const SizedBox(width: 12),
-          Text(
-            value,
-            style: isBold
-                ? AppTextStyles.bodyLg(
-                    color: color ?? AppColors.onSurface,
-                  ).copyWith(fontWeight: FontWeight.w700)
-                : AppTextStyles.bodyMd(color: color ?? AppColors.onSurface),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _showOcrDetail(String text) {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: AppColors.surfaceContainerHigh,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      isScrollControlled: true,
-      builder: (_) => DraggableScrollableSheet(
-        expand: false,
-        initialChildSize: 0.5,
-        maxChildSize: 0.85,
-        builder: (_, controller) => Padding(
-          padding: const EdgeInsets.all(20),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Center(
-                child: Container(
-                  width: 40,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: AppColors.outlineVariant,
-                    borderRadius: BorderRadius.circular(2),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 16),
-              Text('HASIL OCR', style: AppTextStyles.labelCaps()),
-              const SizedBox(height: 12),
-              Expanded(
-                child: SingleChildScrollView(
-                  controller: controller,
-                  child: Text(
-                    text,
-                    style: GoogleFonts.robotoMono(
-                      fontSize: 13,
-                      color: AppColors.onSurface,
-                      height: 1.6,
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
     );
   }
 }
 
-// ── Reusable widgets ────────────────────────────────────────────────────────
-class _IconBtn extends StatelessWidget {
-  final IconData icon;
+// ════════════════════════════════════════════════════════════════════════════
+//  Capture Button
+// ════════════════════════════════════════════════════════════════════════════
+
+class _CaptureButton extends StatelessWidget {
+  final bool isCapturing;
   final VoidCallback onTap;
-  const _IconBtn({required this.icon, required this.onTap});
+  const _CaptureButton({required this.isCapturing, required this.onTap});
+
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        width: 40,
-        height: 40,
-        decoration: BoxDecoration(
-          color: AppColors.surfaceContainerHigh.withValues(alpha: 0.7),
-          borderRadius: BorderRadius.circular(12),
+      onTap: isCapturing ? null : onTap,
+      child: AnimatedScale(
+        scale: isCapturing ? 0.92 : 1.0,
+        duration: const Duration(milliseconds: 120),
+        child: Stack(
+          alignment: Alignment.center,
+          children: [
+            // Outer ring
+            Container(
+              width: 78,
+              height: 78,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                border: Border.all(color: Colors.white, width: 3),
+              ),
+            ),
+            // Inner circle
+            AnimatedContainer(
+              duration: const Duration(milliseconds: 150),
+              width: isCapturing ? 50 : 62,
+              height: isCapturing ? 50 : 62,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: isCapturing
+                    ? Colors.white.withValues(alpha: 0.45)
+                    : Colors.white,
+              ),
+              child: isCapturing
+                  ? const Padding(
+                      padding: EdgeInsets.all(14),
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2.5,
+                        color: Colors.black45,
+                      ),
+                    )
+                  : null,
+            ),
+          ],
         ),
-        child: Icon(icon, color: AppColors.onSurfaceVariant, size: 20),
       ),
     );
   }
 }
 
-class _GridPainter extends CustomPainter {
-  final bool isDetected;
-  _GridPainter({required this.isDetected});
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = (isDetected ? AppColors.successGlint : AppColors.primary)
-          .withValues(alpha: 0.05)
-      ..strokeWidth = 0.5;
-    for (double x = 0; x < size.width; x += 32) {
-      canvas.drawLine(Offset(x, 0), Offset(x, size.height), paint);
-    }
-    for (double y = 0; y < size.height; y += 32) {
-      canvas.drawLine(Offset(0, y), Offset(size.width, y), paint);
-    }
-  }
+// ════════════════════════════════════════════════════════════════════════════
+//  Circle Icon Button
+// ════════════════════════════════════════════════════════════════════════════
 
-  @override
-  bool shouldRepaint(_GridPainter old) => old.isDetected != isDetected;
-}
+class _CircleIconButton extends StatelessWidget {
+  final VoidCallback onTap;
+  final double size;
+  final Widget child;
+  final String? tooltip;
 
-class _BoundingBoxPainter extends CustomPainter {
-  final Color color;
-  final double glowIntensity;
-  final bool isDetected;
-  _BoundingBoxPainter({
-    required this.color,
-    required this.glowIntensity,
-    required this.isDetected,
+  const _CircleIconButton({
+    required this.onTap,
+    required this.size,
+    required this.child,
+    this.tooltip,
   });
-  @override
-  void paint(Canvas canvas, Size size) {
-    if (isDetected) {
-      final rect = RRect.fromRectAndRadius(
-        Rect.fromLTWH(0, 0, size.width, size.height),
-        const Radius.circular(8),
-      );
-      final glow = Paint()
-        ..color = color.withValues(alpha: 0.25 * glowIntensity)
-        ..strokeWidth = 8
-        ..style = PaintingStyle.stroke
-        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8);
-      canvas.drawRRect(rect, glow);
-      final border = Paint()
-        ..color = color.withValues(alpha: glowIntensity)
-        ..strokeWidth = 2.5
-        ..style = PaintingStyle.stroke;
-      canvas.drawRRect(rect, border);
-    } else {
-      const cornerLen = 28.0;
-      final p = Paint()
-        ..color = color.withValues(alpha: 0.9)
-        ..strokeWidth = 3
-        ..strokeCap = StrokeCap.round
-        ..style = PaintingStyle.stroke;
-      canvas.drawLine(Offset(0, cornerLen), const Offset(0, 0), p);
-      canvas.drawLine(const Offset(0, 0), Offset(cornerLen, 0), p);
-      canvas.drawLine(
-        Offset(size.width - cornerLen, 0),
-        Offset(size.width, 0),
-        p,
-      );
-      canvas.drawLine(Offset(size.width, 0), Offset(size.width, cornerLen), p);
-      canvas.drawLine(
-        Offset(0, size.height - cornerLen),
-        Offset(0, size.height),
-        p,
-      );
-      canvas.drawLine(
-        Offset(0, size.height),
-        Offset(cornerLen, size.height),
-        p,
-      );
-      canvas.drawLine(
-        Offset(size.width - cornerLen, size.height),
-        Offset(size.width, size.height),
-        p,
-      );
-      canvas.drawLine(
-        Offset(size.width, size.height - cornerLen),
-        Offset(size.width, size.height),
-        p,
-      );
-    }
-  }
 
   @override
-  bool shouldRepaint(_BoundingBoxPainter old) =>
-      old.color != color ||
-      old.glowIntensity != glowIntensity ||
-      old.isDetected != isDetected;
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: tooltip ?? '',
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          width: size,
+          height: size,
+          decoration: BoxDecoration(
+            color: Colors.black.withValues(alpha: 0.5),
+            shape: BoxShape.circle,
+            border: Border.all(
+              color: Colors.white.withValues(alpha: 0.25),
+              width: 1.5,
+            ),
+          ),
+          child: child,
+        ),
+      ),
+    );
+  }
 }
