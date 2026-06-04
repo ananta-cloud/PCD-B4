@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../models/receipt.dart';
 import '../repositories/receipt_repository.dart';
 import '../services/mongo_service.dart';
+import '../services/ocr_service.dart';
 
 class OcrPreviewController extends ChangeNotifier {
   bool _isSaving = false;

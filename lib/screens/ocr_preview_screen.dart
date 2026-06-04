@@ -5,6 +5,7 @@ import '../core/app_colors.dart';
 import '../models/receipt.dart';
 import '../controllers/ocr_preview_controller.dart';
 import 'detail_screen.dart';
+import '../services/ocr_service.dart';
 
 /// Halaman preview hasil OCR — user bisa lihat teks raw + item yang terdeteksi
 /// sebelum konfirmasi simpan.
@@ -48,7 +49,10 @@ class _OcrPreviewScreenState extends State<OcrPreviewScreen>
   }
 
   Future<void> _saveReceipt() async {
-    final receipt = await _previewController.saveReceipt(widget.croppedFile, widget.parsedReceipt);
+    final receipt = await _previewController.saveReceipt(
+      widget.croppedFile,
+      widget.parsedReceipt,
+    );
 
     if (receipt != null && mounted) {
       Navigator.of(context).pushAndRemoveUntil(
@@ -57,7 +61,10 @@ class _OcrPreviewScreenState extends State<OcrPreviewScreen>
       );
     } else if (mounted && _previewController.errorMessage != null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(_previewController.errorMessage!), backgroundColor: Colors.red),
+        SnackBar(
+          content: Text(_previewController.errorMessage!),
+          backgroundColor: Colors.red,
+        ),
       );
       _previewController.clearError();
     }
@@ -82,7 +89,10 @@ class _OcrPreviewScreenState extends State<OcrPreviewScreen>
         ),
         centerTitle: true,
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios_new_rounded, color: Colors.white70),
+          icon: const Icon(
+            Icons.arrow_back_ios_new_rounded,
+            color: Colors.white70,
+          ),
           onPressed: () => Navigator.pop(context),
         ),
       ),
@@ -202,7 +212,9 @@ class _OcrPreviewScreenState extends State<OcrPreviewScreen>
                               height: 24,
                               alignment: Alignment.center,
                               decoration: BoxDecoration(
-                                color: AppColors.primary.withValues(alpha: 0.15),
+                                color: AppColors.primary.withValues(
+                                  alpha: 0.15,
+                                ),
                                 shape: BoxShape.circle,
                               ),
                               child: Text(
@@ -276,12 +288,19 @@ class _OcrPreviewScreenState extends State<OcrPreviewScreen>
               ),
               child: Row(
                 children: [
-                  const Icon(Icons.warning_amber_rounded, color: Colors.orange, size: 20),
+                  const Icon(
+                    Icons.warning_amber_rounded,
+                    color: Colors.orange,
+                    size: 20,
+                  ),
                   const SizedBox(width: 10),
                   Expanded(
                     child: Text(
                       'Tidak ada item terdeteksi. Cek tab Teks OCR untuk melihat teks mentah.',
-                      style: GoogleFonts.inter(fontSize: 13, color: Colors.orange),
+                      style: GoogleFonts.inter(
+                        fontSize: 13,
+                        color: Colors.orange,
+                      ),
                     ),
                   ),
                 ],
@@ -303,18 +322,28 @@ class _OcrPreviewScreenState extends State<OcrPreviewScreen>
             child: Column(
               children: [
                 if (parsed.subtotal > 0 && parsed.subtotal != parsed.total)
-                  _SummaryRow(label: 'Subtotal', value: _formatRp(parsed.subtotal)),
+                  _SummaryRow(
+                    label: 'Subtotal',
+                    value: _formatRp(parsed.subtotal),
+                  ),
                 _SummaryRow(
                   label: 'TOTAL',
-                  value: parsed.isValid ? _formatRp(parsed.total) : 'Tidak terdeteksi',
+                  value: parsed.isValid
+                      ? _formatRp(parsed.total)
+                      : 'Tidak terdeteksi',
                   isBold: true,
-                  valueColor: parsed.isValid ? AppColors.primary : Colors.redAccent,
+                  valueColor: parsed.isValid
+                      ? AppColors.primary
+                      : Colors.redAccent,
                 ),
                 if (parsed.hasCashPayment) ...[
                   const Divider(color: Colors.white12, height: 20),
                   _SummaryRow(label: 'Tunai', value: _formatRp(parsed.cash!)),
                   if (parsed.change != null && parsed.change! > 0)
-                    _SummaryRow(label: 'Kembalian', value: _formatRp(parsed.change!)),
+                    _SummaryRow(
+                      label: 'Kembalian',
+                      value: _formatRp(parsed.change!),
+                    ),
                 ],
               ],
             ),
@@ -333,7 +362,11 @@ class _OcrPreviewScreenState extends State<OcrPreviewScreen>
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            const Icon(Icons.text_fields_outlined, color: Colors.white24, size: 64),
+            const Icon(
+              Icons.text_fields_outlined,
+              color: Colors.white24,
+              size: 64,
+            ),
             const SizedBox(height: 16),
             Text(
               'Tidak ada teks terdeteksi',
@@ -351,7 +384,11 @@ class _OcrPreviewScreenState extends State<OcrPreviewScreen>
         children: [
           Row(
             children: [
-              const Icon(Icons.article_outlined, color: Colors.white38, size: 16),
+              const Icon(
+                Icons.article_outlined,
+                color: Colors.white38,
+                size: 16,
+              ),
               const SizedBox(width: 8),
               Text(
                 'Teks mentah hasil scan (${rawText.split('\n').length} baris)',
@@ -392,7 +429,9 @@ class _OcrPreviewScreenState extends State<OcrPreviewScreen>
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 28),
           decoration: BoxDecoration(
             color: const Color(0xFF0D1020),
-            border: Border(top: BorderSide(color: Colors.white.withValues(alpha: 0.08))),
+            border: Border(
+              top: BorderSide(color: Colors.white.withValues(alpha: 0.08)),
+            ),
           ),
           child: Row(
             children: [
@@ -403,7 +442,10 @@ class _OcrPreviewScreenState extends State<OcrPreviewScreen>
                   icon: const Icon(Icons.crop_rotate_rounded, size: 18),
                   label: Text(
                     'Crop Ulang',
-                    style: GoogleFonts.inter(fontSize: 14, fontWeight: FontWeight.w600),
+                    style: GoogleFonts.inter(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
                   style: OutlinedButton.styleFrom(
                     foregroundColor: Colors.white70,
@@ -432,13 +474,20 @@ class _OcrPreviewScreenState extends State<OcrPreviewScreen>
                         )
                       : const Icon(Icons.save_alt_rounded, size: 18),
                   label: Text(
-                    _previewController.isSaving ? 'Menyimpan...' : 'Simpan Struk',
-                    style: GoogleFonts.inter(fontSize: 14, fontWeight: FontWeight.w600),
+                    _previewController.isSaving
+                        ? 'Menyimpan...'
+                        : 'Simpan Struk',
+                    style: GoogleFonts.inter(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: AppColors.primary,
                     foregroundColor: Colors.white,
-                    disabledBackgroundColor: AppColors.primary.withValues(alpha: 0.4),
+                    disabledBackgroundColor: AppColors.primary.withValues(
+                      alpha: 0.4,
+                    ),
                     padding: const EdgeInsets.symmetric(vertical: 14),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12),
@@ -450,7 +499,7 @@ class _OcrPreviewScreenState extends State<OcrPreviewScreen>
             ],
           ),
         );
-      }
+      },
     );
   }
 }

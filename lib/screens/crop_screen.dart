@@ -13,6 +13,8 @@ class CropScreen extends StatefulWidget {
   State<CropScreen> createState() => _CropScreenState();
 }
 
+// BARIS INI SEBELUMNYA HILANG:
+class _CropScreenState extends State<CropScreen> {
   final _cropController = CropController();
 
   @override
@@ -39,8 +41,9 @@ class CropScreen extends StatefulWidget {
         ),
       );
     } else if (mounted && _cropController.errorMessage != null) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(_cropController.errorMessage!)));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(_cropController.errorMessage!)),
+      );
       _cropController.clearError();
     }
   }
@@ -80,130 +83,134 @@ class CropScreen extends StatefulWidget {
                     child: Image.file(widget.imageFile, fit: BoxFit.contain),
                   ),
 
-              // Crop overlay dengan handle sudut
-              GestureDetector(
-                onPanStart: (d) => _cropController.onPanStart(d, containerSize),
-                onPanUpdate: (d) => _cropController.onPanUpdate(d, containerSize),
-                onPanEnd: _cropController.onPanEnd,
-                child: CustomPaint(
-                  painter: CropOverlayPainter(
-                    imageSize: Size(
-                      _cropController.originalImage!.width.toDouble(),
-                      _cropController.originalImage!.height.toDouble(),
-                    ),
-                    cropTopLeft: _cropController.cropTopLeft,
-                    cropSize: _cropController.cropSize,
-                    containerSize: containerSize,
-                  ),
-                  size: Size.infinite,
-                ),
-              ),
-
-              // Instruksi atas
-              SafeArea(
-                child: Align(
-                  alignment: Alignment.topCenter,
-                  child: Container(
-                    margin: const EdgeInsets.only(top: 8),
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                    decoration: BoxDecoration(
-                      color: Colors.black.withValues(alpha: 0.6),
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    child: Text(
-                      "Seret sudut untuk menyesuaikan area crop",
-                      style: GoogleFonts.inter(fontSize: 12, color: Colors.white70),
+                  // Crop overlay dengan handle sudut
+                  GestureDetector(
+                    onPanStart: (d) => _cropController.onPanStart(d, containerSize),
+                    onPanUpdate: (d) => _cropController.onPanUpdate(d, containerSize),
+                    onPanEnd: _cropController.onPanEnd,
+                    child: CustomPaint(
+                      painter: CropOverlayPainter(
+                        imageSize: Size(
+                          _cropController.originalImage!.width.toDouble(),
+                          _cropController.originalImage!.height.toDouble(),
+                        ),
+                        cropTopLeft: _cropController.cropTopLeft,
+                        cropSize: _cropController.cropSize,
+                        containerSize: containerSize,
+                      ),
+                      size: Size.infinite,
                     ),
                   ),
-                ),
-              ),
 
-              // Tombol bawah
-              if (!_cropController.isProcessing)
-                Positioned(
-                  bottom: 40,
-                  left: 24,
-                  right: 24,
-                  child: Row(
-                    children: [
-                      // Batal
-                      Expanded(
-                        child: OutlinedButton(
-                          onPressed: () => Navigator.pop(context),
-                          style: OutlinedButton.styleFrom(
-                            side: const BorderSide(color: Colors.white38, width: 1.5),
-                            padding: const EdgeInsets.symmetric(vertical: 14),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12),
+                  // Instruksi atas
+                  SafeArea(
+                    child: Align(
+                      alignment: Alignment.topCenter,
+                      child: Container(
+                        margin: const EdgeInsets.only(top: 8),
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                        decoration: BoxDecoration(
+                          color: Colors.black.withValues(alpha: 0.6),
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: Text(
+                          "Seret sudut untuk menyesuaikan area crop",
+                          style: GoogleFonts.inter(fontSize: 12, color: Colors.white70),
+                        ),
+                      ),
+                    ),
+                  ),
+
+                  // Tombol bawah
+                  if (!_cropController.isProcessing)
+                    Positioned(
+                      bottom: 40,
+                      left: 24,
+                      right: 24,
+                      child: Row(
+                        children: [
+                          // Batal
+                          Expanded(
+                            child: OutlinedButton(
+                              onPressed: () => Navigator.pop(context),
+                              style: OutlinedButton.styleFrom(
+                                side: const BorderSide(color: Colors.white38, width: 1.5),
+                                padding: const EdgeInsets.symmetric(vertical: 14),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                              ),
+                              child: Text(
+                                'Batal',
+                                style: GoogleFonts.inter(
+                                  color: Colors.white,
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
                             ),
                           ),
-                          child: Text(
-                            'Batal',
-                            style: GoogleFonts.inter(
+                          const SizedBox(width: 16),
+                          // Proses
+                          Expanded(
+                            flex: 2,
+                            child: ElevatedButton.icon(
+                              onPressed: _processCrop,
+                              icon: const Icon(Icons.auto_fix_high_rounded, size: 18),
+                              label: Text(
+                                'Proses & OCR',
+                                style: GoogleFonts.inter(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: AppColors.primary,
+                                foregroundColor: Colors.white,
+                                padding: const EdgeInsets.symmetric(vertical: 14),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                elevation: 0,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+
+                  // Processing overlay
+                  if (_cropController.isProcessing)
+                    Container(
+                      color: Colors.black.withValues(alpha: 0.75),
+                      child: Center(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            const CircularProgressIndicator(
                               color: Colors.white,
-                              fontSize: 14,
-                              fontWeight: FontWeight.w600,
+                              strokeWidth: 2.5,
                             ),
-                          ),
+                            const SizedBox(height: 24),
+                            Text(
+                              _cropController.processingStep,
+                              style: GoogleFonts.inter(color: Colors.white, fontSize: 15),
+                            ),
+                          ],
                         ),
                       ),
-                      const SizedBox(width: 16),
-                      // Proses
-                      Expanded(
-                        flex: 2,
-                        child: ElevatedButton.icon(
-                          onPressed: _processCrop,
-                          icon: const Icon(Icons.auto_fix_high_rounded, size: 18),
-                          label: Text(
-                            'Proses & OCR',
-                            style: GoogleFonts.inter(
-                              fontSize: 14,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: AppColors.primary,
-                            foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(vertical: 14),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            elevation: 0,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-
-              // Processing overlay
-              if (_cropController.isProcessing)
-                Container(
-                  color: Colors.black.withValues(alpha: 0.75),
-                  child: Center(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        const CircularProgressIndicator(
-                          color: Colors.white,
-                          strokeWidth: 2.5,
-                        ),
-                        const SizedBox(height: 24),
-                        Text(
-                          _cropController.processingStep,
-                          style: GoogleFonts.inter(color: Colors.white, fontSize: 15),
-                        ),
-                      ],
                     ),
-                  ),
-                ),
-            ],
-          );
-        },
-      ),
+                ], // Penutup children dari Stack
+              );
+            }, // Penutup builder dari LayoutBuilder
+          ),
+        );
+      }, // Penutup builder dari ListenableBuilder
     );
   }
 }
+
+// ── Painter ───────────────────────────────────────────────────────────────
 
 class CropOverlayPainter extends CustomPainter {
   final Size imageSize;
