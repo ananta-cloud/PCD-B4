@@ -1,11 +1,10 @@
-import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:camera/camera.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
+import '../controllers/scan_controller.dart';
 import '../services/image_processing_service.dart';
 import '../services/ocr_service.dart';
 import 'crop_screen.dart';
@@ -25,19 +24,8 @@ class _ScanScreenState extends State<ScanScreen>
   @override
   bool get wantKeepAlive => true;
 
-  // ── Camera ─────────────────────────────────────────────────────────────
-  CameraController? _cameraCtrl;
-  bool _isCameraReady = false;
-  bool _isCapturing = false;
+  final _scanController = ScanController();
   final _picker = ImagePicker();
-
-  // ── Real-time OCR ──────────────────────────────────────────────────────
-  final _textRecognizer = TextRecognizer(script: TextRecognitionScript.latin);
-  Timer? _ocrTimer;
-  bool _isOcrRunning = false;
-  double _confidence = 0.0;       // 0.0 – 1.0
-  int _textBlockCount = 0;        // jumlah blok teks terdeteksi
-  bool _hasTextInFrame = false;   // apakah ada teks di frame
 
   // ── Processing state ───────────────────────────────────────────────────
   _ScanPhase _phase = _ScanPhase.idle;
@@ -52,21 +40,24 @@ class _ScanScreenState extends State<ScanScreen>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _initCamera();
+    _scanController.initCamera();
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    _ocrTimer?.cancel();
-    _textRecognizer.close();
-    _cameraCtrl?.dispose();
+    _scanController.dispose();
     super.dispose();
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.inactive) {
+      _scanController.stopRealtimeOcr();
+    } else if (state == AppLifecycleState.resumed && !_scanController.isCameraReady) {
+      _scanController.initCamera();
+    }
+  }
       _stopRealtimeOcr();
       _cameraCtrl?.dispose();
       if (mounted) setState(() => _isCameraReady = false);
@@ -290,56 +281,39 @@ class _ScanScreenState extends State<ScanScreen>
   // ── Capture ────────────────────────────────────────────────────────────
 
   Future<void> _captureImage() async {
-    if (!_isCameraReady || _isCapturing || _cameraCtrl == null) return;
-
-    setState(() => _isCapturing = true);
     HapticFeedback.mediumImpact();
-    _stopRealtimeOcr(); // pause OCR saat capturing
-
-    try {
-      final image = await _cameraCtrl!.takePicture();
-      if (!mounted) return;
-
+    final file = await _scanController.captureImage();
+    if (file != null && mounted) {
       // UPDATE DI SINI: Berikan tipe data <File> saat melakukan Navigator.push
       // Pastikan di dalam CropScreen milikmu, saat tombol "Selesai/Crop" ditekan, 
       // kamu memanggil: Navigator.pop(context, fileHasilCrop);
       final File? croppedResult = await Navigator.of(context).push<File>(
-        MaterialPageRoute(
-          builder: (_) => CropScreen(imageFile: File(image.path)),
-        ),
+        MaterialPageRoute(builder: (_) => CropScreen(imageFile: file)),
       );
 
       // Jika user tidak membatalkan crop, jalankan pipeline pemrosesan
       if (croppedResult != null && mounted) {
         _processImage(croppedResult);
       }
-    } catch (e) {
-      debugPrint('❌ Capture error: $e');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Gagal mengambil foto: $e')),
-        );
-      }
-    } finally {
-      if (mounted) {
-        setState(() => _isCapturing = false);
-        _startRealtimeOcr(); // resume OCR
-      }
+    } else if (mounted && _scanController.cameraCtrl != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Gagal mengambil foto')),
+      );
     }
   }
 
   Future<void> _pickFromGallery() async {
-    _stopRealtimeOcr();
+    _scanController.stopRealtimeOcr();
     final picked = await _picker.pickImage(
       source: ImageSource.gallery,
       imageQuality: 90,
     );
     if (!mounted) {
-      _startRealtimeOcr();
+      _scanController.startRealtimeOcr();
       return;
     }
     if (picked == null) {
-      _startRealtimeOcr();
+      _scanController.startRealtimeOcr();
       return;
     }
     
@@ -351,7 +325,7 @@ class _ScanScreenState extends State<ScanScreen>
     if (croppedResult != null && mounted) {
       _processImage(croppedResult);
     } else if (mounted) {
-      _startRealtimeOcr();
+      _scanController.startRealtimeOcr();
     }
   }
 
@@ -362,9 +336,14 @@ class _ScanScreenState extends State<ScanScreen>
     super.build(context);
     return Scaffold(
       backgroundColor: Colors.black,
-      body: _isCameraReady && _cameraCtrl != null
-          ? _buildLiveView()
-          : _buildLoading(),
+      body: ListenableBuilder(
+        listenable: _scanController,
+        builder: (context, _) {
+          return _scanController.isCameraReady && _scanController.cameraCtrl != null
+              ? _buildLiveView()
+              : _buildLoading();
+        },
+      ),
     );
   }
 
@@ -409,8 +388,8 @@ class _ScanScreenState extends State<ScanScreen>
           builder: (_, constraints) => CustomPaint(
             painter: _ScanGuidePainter(
               screenSize: Size(constraints.maxWidth, constraints.maxHeight),
-              confidence: _confidence,
-              hasText: _hasTextInFrame,
+              confidence: _scanController.confidence,
+              hasText: _scanController.hasTextInFrame,
             ),
             size: Size(constraints.maxWidth, constraints.maxHeight),
           ),
@@ -436,7 +415,7 @@ class _ScanScreenState extends State<ScanScreen>
   // ── Camera preview — full bleed, cover, tidak gepeng ─────────────────
 
   Widget _buildPreview() {
-    final ctrl = _cameraCtrl!;
+    final ctrl = _scanController.cameraCtrl!;
     final previewSize = ctrl.value.previewSize!;
     // Sensor Android landscape: previewSize.width > previewSize.height
     // Untuk portrait: aspect ratio portrait = previewSize.width / previewSize.height
@@ -495,7 +474,7 @@ class _ScanScreenState extends State<ScanScreen>
             ),
           ),
           // Info blok teks
-          if (_hasTextInFrame)
+          if (_scanController.hasTextInFrame)
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
               decoration: BoxDecoration(
@@ -509,7 +488,7 @@ class _ScanScreenState extends State<ScanScreen>
                   const Icon(Icons.text_fields_rounded, color: Colors.white60, size: 12),
                   const SizedBox(width: 4),
                   Text(
-                    '$_textBlockCount blok teks',
+                    '${_scanController.textBlockCount} blok teks',
                     style: GoogleFonts.inter(fontSize: 10, color: Colors.white60),
                   ),
                 ],
@@ -530,8 +509,8 @@ class _ScanScreenState extends State<ScanScreen>
       right: 0,
       child: Center(
         child: _ConfidencePill(
-          confidence: _confidence,
-          hasText: _hasTextInFrame,
+          confidence: _scanController.confidence,
+          hasText: _scanController.hasTextInFrame,
         ),
       ),
     );
@@ -559,7 +538,7 @@ class _ScanScreenState extends State<ScanScreen>
             ),
 
             // Capture
-            _CaptureButton(isCapturing: _isCapturing, onTap: _captureImage),
+            _CaptureButton(isCapturing: _scanController.isCapturing, onTap: _captureImage),
 
             // Placeholder simetri
             const SizedBox(width: 54, height: 54),

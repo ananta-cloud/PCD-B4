@@ -2,6 +2,7 @@ import 'dart:developer';
 import 'package:mongo_dart/mongo_dart.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:bcrypt/bcrypt.dart'; 
+import 'package:hive_flutter/hive_flutter.dart';
 
 class MongoService {
   static Db? _db;
@@ -78,7 +79,6 @@ class MongoService {
 
   static Future<bool> loginUser(String email, String password) async {
     try {
-      // Coba reconnect kalau belum tersambung
       if (!isConnected) await connect();
 
       var collection = getCollection(usersCollection);
@@ -89,14 +89,17 @@ class MongoService {
         return false;
       }
 
-      // 3. Verifikasi Password Input dengan Hashed Password di Database
       final String storedHashedPassword = user['password'];
       final bool isPasswordCorrect = BCrypt.checkpw(password, storedHashedPassword);
 
       if (isPasswordCorrect) {
-        // Set sesi login
         currentUserId = user['_id'].toHexString();
         currentUserEmail = user['email'];
+        
+        var sessionBox = await Hive.openBox('session');
+        await sessionBox.put('userId', currentUserId);
+        await sessionBox.put('email', currentUserEmail);
+
         log("✅ Login berhasil! ID: $currentUserId");
         return true;
       } else {
@@ -109,12 +112,15 @@ class MongoService {
     }
   }
 
-  static void logout() {
+  static Future<void> logout() async {
+    var sessionBox = await Hive.openBox('session');
+    await sessionBox.delete('userId');
+    await sessionBox.delete('email');
+
     currentUserId = null;
     currentUserEmail = null;
     log("✅ User berhasil logout");
   }
-
   // ==================== RECEIPTS ====================
 
   /// Fungsi untuk menyimpan struk baru ke MongoDB

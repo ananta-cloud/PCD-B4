@@ -4,8 +4,7 @@ import '../core/app_text_styles.dart';
 import '../widgets/auth_widgets.dart';
 import 'register_screen.dart';
 import '../main.dart';
-import '../services/mongo_service.dart';
-import '../services/hive_utils.dart';
+import '../controllers/auth_controller.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -18,7 +17,7 @@ class _LoginScreenState extends State<LoginScreen>
   final _emailCtrl = TextEditingController();
   final _passwordCtrl = TextEditingController();
   bool _obscurePassword = true;
-  bool _isLoading = false;
+  final _authController = AuthController();
 
   late final AnimationController _fadeCtrl;
   late final Animation<double> _fadeAnim;
@@ -41,6 +40,7 @@ class _LoginScreenState extends State<LoginScreen>
     _fadeCtrl.dispose();
     _emailCtrl.dispose();
     _passwordCtrl.dispose();
+    _authController.dispose();
     super.dispose();
   }
 
@@ -48,30 +48,12 @@ class _LoginScreenState extends State<LoginScreen>
     final email = _emailCtrl.text.trim();
     final password = _passwordCtrl.text.trim();
 
-    if (email.isEmpty || password.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Email dan Password harus diisi!')),
-      );
-      return;
-    }
-
-    if (_isLoading) return;
-    setState(() => _isLoading = true);
-
     try {
-      bool success = await MongoService.loginUser(email, password);
-
+      final success = await _authController.authenticate(email, password);
+      
       if (!mounted) return;
-      setState(() => _isLoading = false);
 
       if (success) {
-        // Simpan sesi login ke Hive agar persisten
-        await HiveUtils.loginUser(
-          email: email,
-          name: MongoService.currentUserEmail ?? email,
-        );
-
-        if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Login Berhasil!')),
         );
@@ -83,17 +65,15 @@ class _LoginScreenState extends State<LoginScreen>
             transitionDuration: const Duration(milliseconds: 400),
           ),
         );
-      } else {
+      } else if (_authController.errorMessage != null) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Kredensial salah. Cek email dan password.')),
+          SnackBar(content: Text(_authController.errorMessage!)),
         );
       }
     } catch (e) {
       if (!mounted) return;
-      setState(() => _isLoading = false);
-      // Ini akan menampilkan ERROR ASLI ke layar HP Anda
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('ERROR SERVER: $e'), backgroundColor: Colors.red),
+        SnackBar(content: Text(_authController.errorMessage ?? 'ERROR SERVER: $e'), backgroundColor: Colors.red),
       );
     }
   }
@@ -182,10 +162,15 @@ class _LoginScreenState extends State<LoginScreen>
                               ),
                             ),
                             const SizedBox(height: 24),
-                            AuthPrimaryButton(
-                              label: 'Authenticate',
-                              isLoading: _isLoading,
-                              onTap: _authenticate,
+                            ListenableBuilder(
+                              listenable: _authController,
+                              builder: (context, _) {
+                                return AuthPrimaryButton(
+                                  label: 'Login',
+                                  isLoading: _authController.isLoading,
+                                  onTap: _authenticate,
+                                );
+                              },
                             ),
                             // HAPUS AuthOrDivider dan SizedBox di sini
                           ],

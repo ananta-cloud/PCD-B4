@@ -10,6 +10,7 @@ import 'screens/history_screen.dart';
 import 'screens/reports_screen.dart';
 import 'services/hive_service.dart';
 import 'services/mongo_service.dart';
+import 'screens/auth_gate.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -66,8 +67,8 @@ class SmartReceiptScannerApp extends StatelessWidget {
       title: 'Smart Receipt Scanner',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.dark,
-      // App starts at LoginScreen; navigates to MainShell after auth
-      home: const LoginScreen(),
+      // App starts at AuthGate; navigates to MainShell after auth
+      home: const AuthGate(),
     );
   }
 }
