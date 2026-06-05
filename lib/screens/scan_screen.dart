@@ -6,7 +6,12 @@ import 'package:camera/camera.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
+import '../services/image_processing_service.dart';
+import '../services/ocr_service.dart';
 import 'crop_screen.dart';
+
+enum _ScanPhase { idle, processing, result }
+enum _ImageView { original, processed }
 
 class ScanScreen extends StatefulWidget {
   const ScanScreen({super.key});
@@ -33,6 +38,15 @@ class _ScanScreenState extends State<ScanScreen>
   double _confidence = 0.0;       // 0.0 – 1.0
   int _textBlockCount = 0;        // jumlah blok teks terdeteksi
   bool _hasTextInFrame = false;   // apakah ada teks di frame
+
+  // ── Processing state ───────────────────────────────────────────────────
+  _ScanPhase _phase = _ScanPhase.idle;
+  _ImageView _imageView = _ImageView.original;
+  String _processingStep = '';
+  File? _originalFile;
+  File? _grayscaleFile;
+  File? _thresholdFile;
+  ParsedReceipt? _ocrResult;
 
   @override
   void initState() {
@@ -94,25 +108,10 @@ class _ScanScreenState extends State<ScanScreen>
       if (!mounted) return;
       setState(() {
         _thresholdFile = threshFile;
-        _processingStep = 'Mendeteksi dan memotong struk...';
-      });
-
-      // Step 3: Crop receipt body using OpenCV before OCR
-      File imageForOcr = file;
-      final croppedBytes = await OpenCVService().cropReceiptBody(file.path);
-      if (croppedBytes != null && croppedBytes.isNotEmpty) {
-        final tempPath = '${Directory.systemTemp.path}/cropped_receipt_${DateTime.now().millisecondsSinceEpoch}.jpg';
-        final tempFile = File(tempPath);
-        await tempFile.writeAsBytes(croppedBytes, flush: true);
-        imageForOcr = tempFile;
-        debugPrint('OCR menggunakan gambar cropped: ${tempFile.path} (bytes=${croppedBytes.length})');
-      } else {
-        debugPrint('OCR fallback menggunakan gambar asli: ${file.path}');
-      }
-
-      setState(() {
         _processingStep = 'Menjalankan OCR...';
       });
+
+      final imageForOcr = file;
 
       debugPrint('OCR input file path: ${imageForOcr.path}');
       final result = await OcrService.processImage(imageForOcr);
@@ -123,13 +122,19 @@ class _ScanScreenState extends State<ScanScreen>
         _phase = _ScanPhase.result;
         _imageView = _ImageView.original;
       });
-      _resultCtrl.forward(from: 0);
       HapticFeedback.mediumImpact();
     } catch (e) {
       if (!mounted) return;
       _showError('Gagal memproses gambar: $e');
       setState(() => _phase = _ScanPhase.idle);
     }
+  }
+
+  void _showError(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
+    );
   }
 
   // ── Camera init ────────────────────────────────────────────────────────
@@ -410,10 +415,10 @@ class _ScanScreenState extends State<ScanScreen>
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
             colors: [
-              Colors.black.withValues(alpha: 0.65),
+              Colors.black.withOpacity(0.65),
               Colors.transparent,
               Colors.transparent,
-              Colors.black.withValues(alpha: 0.70),
+              Colors.black.withOpacity(0.70),
             ],
             stops: const [0.0, 0.22, 0.65, 1.0],
           ),
@@ -445,9 +450,9 @@ class _ScanScreenState extends State<ScanScreen>
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
               decoration: BoxDecoration(
-                color: Colors.black.withValues(alpha: 0.55),
+                color: Colors.black.withOpacity(0.55),
                 borderRadius: BorderRadius.circular(20),
-                border: Border.all(color: Colors.white.withValues(alpha: 0.18)),
+                border: Border.all(color: Colors.white.withOpacity(0.18)),
               ),
               child: Row(
                 mainAxisSize: MainAxisSize.min,
@@ -552,14 +557,14 @@ class _ScanGuidePainter extends CustomPainter {
       ..addRect(Rect.fromLTWH(0, 0, w, h))
       ..addRRect(rrect)
       ..fillType = PathFillType.evenOdd;
-    canvas.drawPath(overlay, Paint()..color = Colors.black.withValues(alpha: 0.52));
+    canvas.drawPath(overlay, Paint()..color = Colors.black.withOpacity(0.52));
 
     // ── Border warna sesuai status ──
     final borderColor = _frameColor();
     canvas.drawRRect(
       rrect,
       Paint()
-        ..color = borderColor.withValues(alpha: 0.6)
+        ..color = borderColor.withOpacity(0.6)
         ..strokeWidth = 1.5
         ..style = PaintingStyle.stroke,
     );
@@ -644,9 +649,9 @@ class _ConfidencePill extends StatelessWidget {
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
           decoration: BoxDecoration(
-            color: Colors.black.withValues(alpha: 0.6),
+            color: Colors.black.withOpacity(0.6),
             borderRadius: BorderRadius.circular(24),
-            border: Border.all(color: color.withValues(alpha: 0.5), width: 1.2),
+            border: Border.all(color: color.withOpacity(0.5), width: 1.2),
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
@@ -675,7 +680,7 @@ class _ConfidencePill extends StatelessWidget {
               child: LinearProgressIndicator(
                 value: confidence.clamp(0.0, 1.0),
                 minHeight: 4,
-                backgroundColor: Colors.white.withValues(alpha: 0.15),
+                backgroundColor: Colors.white.withOpacity(0.15),
                 valueColor: AlwaysStoppedAnimation<Color>(color),
               ),
             ),
@@ -722,7 +727,7 @@ class _CaptureButton extends StatelessWidget {
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
                 color: isCapturing
-                    ? Colors.white.withValues(alpha: 0.45)
+                    ? Colors.white.withOpacity(0.45)
                     : Colors.white,
               ),
               child: isCapturing
@@ -769,10 +774,10 @@ class _CircleIconButton extends StatelessWidget {
           width: size,
           height: size,
           decoration: BoxDecoration(
-            color: Colors.black.withValues(alpha: 0.5),
+            color: Colors.black.withOpacity(0.5),
             shape: BoxShape.circle,
             border: Border.all(
-              color: Colors.white.withValues(alpha: 0.25),
+              color: Colors.white.withOpacity(0.25),
               width: 1.5,
             ),
           ),
