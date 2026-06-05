@@ -27,6 +27,7 @@ class ParsedReceipt {
   final double? cash;
   final double? change;
   final String rawText;
+  final String formattedItems; // display: "NAMA BARANG   3.500" per baris
   final double confidence;
   final String currency;
 
@@ -39,10 +40,44 @@ class ParsedReceipt {
     required this.rawText,
     required this.confidence,
     required this.currency,
-  });
+    String? formattedItems,
+  }) : formattedItems = formattedItems ?? _buildFormatted(items);
 
   bool get hasCashPayment => cash != null && cash! > 0;
   bool get isValid => total > 0;
+
+  /// Format: "MIE GORENG      3.500"
+  static String _buildFormatted(List<ReceiptItem> items) {
+    if (items.isEmpty) return '';
+    // Cari panjang nama terpanjang untuk alignment
+    final maxLen = items.fold(0, (m, i) => i.name.length > m ? i.name.length : m);
+    final buf = StringBuffer();
+    for (final item in items) {
+      final name = item.name.toUpperCase().padRight(maxLen + 2);
+      // Format harga: angka dengan titik ribuan (misal 3.500)
+      final price = _formatPrice(item.totalPrice);
+      if (item.qty > 1) {
+        buf.writeln('${name}${price}');
+        final unitStr = '  ${item.qty} x ${_formatPrice(item.unitPrice)}';
+        buf.writeln(unitStr);
+      } else {
+        buf.writeln('${name}${price}');
+      }
+    }
+    return buf.toString().trimRight();
+  }
+
+  static String _formatPrice(double value) {
+    // Format dengan titik ribuan: 3500 → "3.500"
+    final intVal = value.toInt();
+    final str = intVal.toString();
+    final buf = StringBuffer();
+    for (int i = 0; i < str.length; i++) {
+      if (i > 0 && (str.length - i) % 3 == 0) buf.write('.');
+      buf.write(str[i]);
+    }
+    return buf.toString();
+  }
 }
 
 /// OCR Service — uses Google ML Kit for offline text recognition.
@@ -57,8 +92,21 @@ class OcrService {
     final recognizedText = await _textRecognizer.processImage(inputImage);
 
     final rawText = recognizedText.text;
+
+    // DEBUG: lihat teks mentah yang dibaca ML Kit
+    debugPrint('═══ OCR RAW TEXT ═══');
+    for (final line in rawText.split('\n')) {
+      debugPrint('  | $line');
+    }
+    debugPrint('════════════════════');
+
     final confidence = _calculateConfidence(recognizedText);
     final parsed = _parseReceipt(rawText);
+
+    debugPrint('═══ ITEMS PARSED: ${parsed.items.length} ═══');
+    for (final item in parsed.items) {
+      debugPrint('  → ${item.name} | qty:${item.qty} | price:${item.totalPrice}');
+    }
 
     return ParsedReceipt(
       items: parsed.items,
@@ -68,7 +116,7 @@ class OcrService {
       change: parsed.change,
       rawText: rawText,
       confidence: confidence,
-      currency:'Rp',
+      currency: 'Rp',
     );
   }
 
@@ -339,13 +387,16 @@ class OcrService {
     }
 
     // Check for line with just "name  price" pattern
+    // ✅ Support: 1+ spasi (bukan hanya 2+), untuk struk biasa
     final namePriceMatch = RegExp(
-      r'^(.+?)\s{2,}([\d.,]+)\s*$',
+      r'^(.+?)\s+(\d[\d.,]*)\s*$',
     ).firstMatch(line);
     if (namePriceMatch != null) {
       final name = namePriceMatch.group(1)!.trim();
-      final price = _parseNumber(namePriceMatch.group(2)!);
-      if (!RegExp(r'^\d').hasMatch(name) && price > 0) {
+      final priceStr = namePriceMatch.group(2)!;
+      final price = _parseNumber(priceStr);
+      // Pastikan nama bukan angka semua, harga > 0, dan panjang nama minimal 2 karakter
+      if (!RegExp(r'^[\d.,]+$').hasMatch(name) && price > 0 && name.length >= 2) {
         return _ClassifiedLine(
           line,
           _LineType.fullItem,
@@ -551,31 +602,59 @@ class OcrService {
     return largest;
   }
 
-  // ── Confidence ──────────────────────────────────────────────────────────
-
+  /// Hitung confidence berdasarkan kualitas OCR output.
+  /// ML Kit Latin script di Android hampir tidak pernah mengembalikan
+  /// nilai confidence dari element, jadi kita pakai heuristic multi-faktor.
   static double _calculateConfidence(RecognizedText text) {
     if (text.blocks.isEmpty) return 0.0;
-    double totalConfidence = 0;
-    int count = 0;
+
+    // ── Coba ambil dari ML Kit langsung ──────────────────────────────────
+    double totalConf = 0;
+    int confCount = 0;
     for (final block in text.blocks) {
       for (final line in block.lines) {
-        for (final element in line.elements) {
-          final conf = element.confidence;
-          if (conf != null) {
-            totalConfidence += conf;
-            count++;
+        for (final el in line.elements) {
+          if (el.confidence != null) {
+            totalConf += el.confidence!;
+            confCount++;
           }
         }
       }
     }
-    if (count > 0) return (totalConfidence / count).clamp(0.0, 1.0);
-    int totalElements = 0;
+    if (confCount > 0) return (totalConf / confCount).clamp(0.0, 1.0);
+
+    // ── Fallback: heuristic multi-faktor ─────────────────────────────────
+    // Faktor 1: Jumlah block (struk biasanya 3-10 block)
+    final blockScore = (text.blocks.length / 8.0).clamp(0.0, 1.0);
+
+    // Faktor 2: Rata-rata panjang teks per line (lebih panjang = lebih banyak info)
+    int totalLines = 0;
+    int totalChars = 0;
     for (final block in text.blocks) {
       for (final line in block.lines) {
-        totalElements += line.elements.length;
+        totalLines++;
+        totalChars += line.text.length;
       }
     }
-    return (totalElements / 30.0).clamp(0.3, 0.95);
+    final avgLineLen = totalLines > 0 ? totalChars / totalLines : 0;
+    final lengthScore = (avgLineLen / 20.0).clamp(0.0, 1.0);
+
+    // Faktor 3: Rasio karakter "bersih" (huruf/angka) vs total
+    final allText = text.text;
+    final cleanChars = RegExp(r'[a-zA-Z0-9.,\s]').allMatches(allText).length;
+    final cleanRatio = allText.isNotEmpty ? cleanChars / allText.length : 0.0;
+
+    // Faktor 4: Ada angka (harga) → kemungkinan struk valid
+    final hasNumbers = RegExp(r'\d{3,}').hasMatch(allText);
+    final numberBonus = hasNumbers ? 0.1 : 0.0;
+
+    // Gabung dengan bobot
+    final score = (blockScore * 0.25) +
+        (lengthScore * 0.30) +
+        (cleanRatio * 0.35) +
+        numberBonus;
+
+    return score.clamp(0.0, 1.0);
   }
 
   static void dispose() {
