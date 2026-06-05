@@ -87,6 +87,7 @@ class _ScanScreenState extends State<ScanScreen>
   }
 
   // ── Processing pipeline ─────────────────────────────────────────────────
+  // ── Processing pipeline ─────────────────────────────────────────────────
   Future<void> _processImage(File file) async {
     setState(() {
       _phase = _ScanPhase.processing;
@@ -95,7 +96,7 @@ class _ScanScreenState extends State<ScanScreen>
     });
 
     try {
-      // Step 1: Grayscale
+      // Step 1: Grayscale (Menggunakan service PCD kamu)
       final grayFile = await ImageProcessingService.convertToGrayscale(file);
       if (!mounted) return;
       setState(() {
@@ -103,26 +104,57 @@ class _ScanScreenState extends State<ScanScreen>
         _processingStep = 'Binary thresholding...';
       });
 
-      // Step 2: Threshold
+      // Step 2: Threshold (Menggunakan service PCD kamu)
       final threshFile = await ImageProcessingService.applyThreshold(grayFile);
       if (!mounted) return;
       setState(() {
         _thresholdFile = threshFile;
+        _processingStep = 'Mendeteksi area dengan AI YOLOv8...'; // Status update UI
+      });
+
+      // ── INJEKSI LOGIKA DETEKSI YOLOv8 DI SINI ──
+      List<Rect> itemBoxes = [];
+      Rect? totalBox;
+
+      try {
+        // Panggil fungsi inferensi dari library YOLOv8 TFLite yang kamu gunakan pada file threshold, contoh:
+        // final yoloInference = await myYoloModel.runOnImage(threshFile.path);
+        
+        // Lakukan perulangan hasil prediksi untuk memisahkan kotak koordinat:
+        /*
+        for (var detection in yoloInference) {
+          if (detection.label == 'item_belanja') {
+            itemBoxes.add(detection.boundingBox);
+          } else if (detection.label == 'total') {
+            totalBox = detection.boundingBox;
+          }
+        }
+        */
+      } catch (yoloError) {
+        debugPrint('YOLO gagal mendeteksi, mengaktifkan mode fallback OCR penuh: $yoloError');
+      }
+
+      // Step 3: Jalankan OCR dengan melemparkan saringan kotak koordinat dari YOLO
+      setState(() {
         _processingStep = 'Menjalankan OCR...';
       });
 
-      final imageForOcr = file;
-
-      debugPrint('OCR input file path: ${imageForOcr.path}');
-      final result = await OcrService.processImage(imageForOcr);
+      final result = await OcrService.processImage(
+        threshFile, // Gambar hasil PCD biner yang kontrasnya tajam
+        itemBoxes: itemBoxes,
+        totalBox: totalBox,
+      );
       if (!mounted) return;
 
+      // ── FLOW ORIGINAL KAMU ──
+      // Mengubah state internal agar UI lokal langsung merespons perubahan ke halaman hasil
       setState(() {
         _ocrResult = result;
         _phase = _ScanPhase.result;
         _imageView = _ImageView.original;
       });
       HapticFeedback.mediumImpact();
+      
     } catch (e) {
       if (!mounted) return;
       _showError('Gagal memproses gambar: $e');
@@ -255,6 +287,8 @@ class _ScanScreenState extends State<ScanScreen>
 
   // ── Capture ────────────────────────────────────────────────────────────
 
+  // ── Capture ────────────────────────────────────────────────────────────
+
   Future<void> _captureImage() async {
     if (!_isCameraReady || _isCapturing || _cameraCtrl == null) return;
 
@@ -266,11 +300,19 @@ class _ScanScreenState extends State<ScanScreen>
       final image = await _cameraCtrl!.takePicture();
       if (!mounted) return;
 
-      await Navigator.of(context).push(
+      // UPDATE DI SINI: Berikan tipe data <File> saat melakukan Navigator.push
+      // Pastikan di dalam CropScreen milikmu, saat tombol "Selesai/Crop" ditekan, 
+      // kamu memanggil: Navigator.pop(context, fileHasilCrop);
+      final File? croppedResult = await Navigator.of(context).push<File>(
         MaterialPageRoute(
           builder: (_) => CropScreen(imageFile: File(image.path)),
         ),
       );
+
+      // Jika user tidak membatalkan crop, jalankan pipeline pemrosesan
+      if (croppedResult != null && mounted) {
+        _processImage(croppedResult);
+      }
     } catch (e) {
       debugPrint('❌ Capture error: $e');
       if (mounted) {
@@ -300,10 +342,17 @@ class _ScanScreenState extends State<ScanScreen>
       _startRealtimeOcr();
       return;
     }
-    await Navigator.of(context).push(
+    
+    // UPDATE DI SINI: Lakukan hal yang sama untuk pengambilan dari galeri
+    final File? croppedResult = await Navigator.of(context).push<File>(
       MaterialPageRoute(builder: (_) => CropScreen(imageFile: File(picked.path))),
     );
-    if (mounted) _startRealtimeOcr();
+    
+    if (croppedResult != null && mounted) {
+      _processImage(croppedResult);
+    } else if (mounted) {
+      _startRealtimeOcr();
+    }
   }
 
   // ── Build ──────────────────────────────────────────────────────────────

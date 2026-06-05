@@ -33,3 +33,4 @@ flutter:
   assets:
     - lib/models/datasets/images/
     - .env
+    - assets/ml/best_int8.tftlite

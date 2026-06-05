@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'package:flutter/material.dart';
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 
 /// A single line item on a receipt
@@ -42,33 +43,91 @@ class ParsedReceipt {
   bool get isValid => total > 0;
 }
 
-/// OCR Service — uses Google ML Kit for offline text recognition.
 class OcrService {
   static final _textRecognizer = TextRecognizer(
     script: TextRecognitionScript.latin,
   );
 
-  /// Process an image and return structured receipt data.
-  static Future<ParsedReceipt> processImage(File imageFile) async {
+  /// UPDATE: Fungsi sekarang menerima List kotak item dan satu kotak total dari YOLO
+  static Future<ParsedReceipt> processImage(
+    File imageFile, {
+    List<Rect> itemBoxes = const [], // Menampung semua kotak berlabel 'item_belanja'
+    Rect? totalBox,                  // Menampung kotak berlabel 'total'
+  }) async {
     final inputImage = InputImage.fromFilePath(imageFile.path);
     final recognizedText = await _textRecognizer.processImage(inputImage);
 
-    final rawText = recognizedText.text;
+    // Wadah penampung baris teks yang difilter koordinat YOLO
+    List<String> itemLines = [];
+    List<String> totalLines = [];
+    List<String> allLines = []; // Untuk cadangan jika YOLO meleset
+
+    // Iterasi membaca baris demi baris teks dari Google OCR
+    for (TextBlock block in recognizedText.blocks) {
+      for (TextLine line in block.lines) {
+        final Rect kotakTeks = line.boundingBox;
+        allLines.add(line.text);
+
+        // 1. Cek apakah baris teks ini berada di dalam salah satu kotak 'item_belanja'
+        bool isInsideItem = false;
+        for (Rect box in itemBoxes) {
+          if (_isBoxInside(kotakTeks, box)) {
+            isInsideItem = true;
+            break;
+          }
+        }
+        if (isInsideItem) {
+          itemLines.add(line.text);
+        }
+
+        // 2. Cek apakah baris teks ini berada di dalam kotak 'total'
+        if (totalBox != null && _isBoxInside(kotakTeks, totalBox)) {
+          totalLines.add(line.text);
+        }
+      }
+    }
+
+    // --- STRATEGI FALLBACK AMAN ---
+    // Jika YOLO berhasil memfilter, gunakan teks hasil saringan tersebut.
+    // Jika koordinat YOLO kosong/meleset, gunakan seluruh teks asli agar aplikasi tidak blank.
+    String rawTextForItems = itemLines.isNotEmpty ? itemLines.join('\n') : recognizedText.text;
+
     final confidence = _calculateConfidence(recognizedText);
-    final parsed = _parseReceipt(rawText);
+    
+    // 3. Ekstrak Daftar Barang: Jalankan parser bawaanmu HANYA pada teks area 'item_belanja'
+    // Ini membuat _parseReceipt milikmu fokus tanpa terganggu teks info_toko atau header lainnya!
+    final parsed = _parseReceipt(rawTextForItems);
+
+    // 4. Ekstrak Nilai Total: Jika kotak total terdeteksi, ambil angka terbesar di dalam kotak tersebut
+    double finalTotal = parsed.total;
+    if (totalLines.isNotEmpty) {
+      finalTotal = _findLargestNumber(totalLines);
+    } else if (finalTotal == 0) {
+      // Jika area total kosong, gunakan pencarian angka terbesar dari seluruh struk sebagai cadangan
+      finalTotal = _findLargestNumber(allLines);
+    }
 
     return ParsedReceipt(
       items: parsed.items,
       subtotal: parsed.subtotal,
-      total: parsed.total,
+      total: finalTotal,
       cash: parsed.cash,
       change: parsed.change,
-      rawText: rawText,
+      rawText: recognizedText.text, // Tetap simpan teks utuh untuk keperluan debugging/log
       confidence: confidence,
-      currency:'Rp',
+      currency: 'Rp',
     );
   }
 
+  /// HELPER BARU: Logika matematika untuk mengecek irisan posisi kotak teks di dalam kotak YOLO
+  static bool _isBoxInside(Rect inner, Rect outer) {
+    // Berikan sedikit toleransi sebesar 10 piksel jika koordinat pemotongan YOLO terlalu mepet
+    const double padding = 10;
+    return inner.left >= (outer.left - padding) &&
+           inner.right <= (outer.right + padding) &&
+           inner.top >= (outer.top - padding) &&
+           inner.bottom <= (outer.bottom + padding);
+  }
   // ═══════════════════════════════════════════════════════════════════════════
   //  RECEIPT PARSER — handles messy real-world OCR output
   // ═══════════════════════════════════════════════════════════════════════════
