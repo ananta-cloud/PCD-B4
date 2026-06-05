@@ -166,7 +166,7 @@ class _LoginScreenState extends State<LoginScreen>
                               listenable: _authController,
                               builder: (context, _) {
                                 return AuthPrimaryButton(
-                                  label: 'Authenticate',
+                                  label: 'Login',
                                   isLoading: _authController.isLoading,
                                   onTap: _authenticate,
                                 );
