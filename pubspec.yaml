@@ -1,6 +1,6 @@
 name: smart_receipt_scanner
 description: "Smart Receipt Scanner - AI-powered OCR receipt scanning app"
-publish_to: 'none'
+publish_to: "none"
 
 version: 1.0.0+1
 
@@ -17,6 +17,12 @@ dependencies:
   image: ^4.5.0
   google_mlkit_text_recognition: ^0.14.0
   path_provider: ^2.1.5
+  hive: ^2.2.3
+  hive_flutter: ^1.1.0
+  flutter_dotenv: ^6.0.1
+  mongo_dart: ^0.10.8
+  bcrypt: ^1.2.0
+  # opencv_dart: 2.2.1+4  # Temporarily disabled - requires native NDK build
 
 dev_dependencies:
   flutter_test:
@@ -25,3 +31,6 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  assets:
+    - lib/models/datasets/images/
+    - .env

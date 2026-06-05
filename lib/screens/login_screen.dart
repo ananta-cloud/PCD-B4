@@ -2,9 +2,10 @@ import 'package:flutter/material.dart';
 import '../core/app_colors.dart';
 import '../core/app_text_styles.dart';
 import '../widgets/auth_widgets.dart';
-import '../controllers/auth_controller.dart';
 import 'register_screen.dart';
 import '../main.dart';
+import '../services/mongo_service.dart';
+import '../services/hive_utils.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -17,11 +18,8 @@ class _LoginScreenState extends State<LoginScreen>
   final _emailCtrl = TextEditingController();
   final _passwordCtrl = TextEditingController();
   bool _obscurePassword = true;
+  bool _isLoading = false;
 
-  // ── Controller ──────────────────────────────────────────────────────────
-  late final AuthController _authCtrl;
-
-  // ── Animasi (tetap di View) ─────────────────────────────────────────────
   late final AnimationController _fadeCtrl;
   late final Animation<double> _fadeAnim;
   late final Animation<Offset> _slideAnim;
@@ -29,9 +27,6 @@ class _LoginScreenState extends State<LoginScreen>
   @override
   void initState() {
     super.initState();
-    _authCtrl = AuthController();
-    _authCtrl.addListener(_onControllerChanged);
-
     _fadeCtrl = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 800),
@@ -43,33 +38,64 @@ class _LoginScreenState extends State<LoginScreen>
 
   @override
   void dispose() {
-    _authCtrl.removeListener(_onControllerChanged);
-    _authCtrl.dispose();
     _fadeCtrl.dispose();
     _emailCtrl.dispose();
     _passwordCtrl.dispose();
     super.dispose();
   }
 
-  void _onControllerChanged() {
-    if (mounted) setState(() {});
-  }
+  Future<void> _authenticate() async {
+    final email = _emailCtrl.text.trim();
+    final password = _passwordCtrl.text.trim();
 
-  // ── View Actions ────────────────────────────────────────────────────────
-  Future<void> _onAuthenticate() async {
-    final success = await _authCtrl.authenticate(
-      _emailCtrl.text,
-      _passwordCtrl.text,
-    );
-    if (!mounted || !success) return;
-    Navigator.of(context).pushReplacement(
-      PageRouteBuilder(
-        pageBuilder: (context, animation, secondaryAnimation) => const MainShell(),
-        transitionsBuilder: (context, anim, secondaryAnim, child) =>
-            FadeTransition(opacity: anim, child: child),
-        transitionDuration: const Duration(milliseconds: 400),
-      ),
-    );
+    if (email.isEmpty || password.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Email dan Password harus diisi!')),
+      );
+      return;
+    }
+
+    if (_isLoading) return;
+    setState(() => _isLoading = true);
+
+    try {
+      bool success = await MongoService.loginUser(email, password);
+
+      if (!mounted) return;
+      setState(() => _isLoading = false);
+
+      if (success) {
+        // Simpan sesi login ke Hive agar persisten
+        await HiveUtils.loginUser(
+          email: email,
+          name: MongoService.currentUserEmail ?? email,
+        );
+
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Login Berhasil!')),
+        );
+        Navigator.of(context).pushReplacement(
+          PageRouteBuilder(
+            pageBuilder: (context, animation, secondaryAnimation) => const MainShell(),
+            transitionsBuilder: (context, anim, secondaryAnim, child) =>
+                FadeTransition(opacity: anim, child: child),
+            transitionDuration: const Duration(milliseconds: 400),
+          ),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Kredensial salah. Cek email dan password.')),
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _isLoading = false);
+      // Ini akan menampilkan ERROR ASLI ke layar HP Anda
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('ERROR SERVER: $e'), backgroundColor: Colors.red),
+      );
+    }
   }
 
   @override
@@ -79,6 +105,7 @@ class _LoginScreenState extends State<LoginScreen>
       body: SafeArea(
         child: Stack(
           children: [
+            // Grid background
             const Positioned.fill(child: AuthGridBackground()),
             FadeTransition(
               opacity: _fadeAnim,
@@ -96,6 +123,7 @@ class _LoginScreenState extends State<LoginScreen>
                       const SizedBox(height: 8),
                       Text('Intelligent edge extraction.', style: AppTextStyles.bodyMd()),
                       const SizedBox(height: 48),
+                      // Form card
                       Container(
                         decoration: BoxDecoration(
                           color: AppColors.surfaceContainerHigh,
@@ -156,13 +184,10 @@ class _LoginScreenState extends State<LoginScreen>
                             const SizedBox(height: 24),
                             AuthPrimaryButton(
                               label: 'Authenticate',
-                              isLoading: _authCtrl.isLoading,
-                              onTap: _onAuthenticate,
+                              isLoading: _isLoading,
+                              onTap: _authenticate,
                             ),
-                            const SizedBox(height: 20),
-                            AuthOrDivider(),
-                            const SizedBox(height: 20),
-                            AuthBiometricButton(onTap: _onAuthenticate),
+                            // HAPUS AuthOrDivider dan SizedBox di sini
                           ],
                         ),
                       ),
@@ -178,7 +203,7 @@ class _LoginScreenState extends State<LoginScreen>
                                   builder: (_) => const RegisterScreen()),
                             ),
                             child: Text(
-                              'Request Access',
+                              'Register Account',
                               style: AppTextStyles.bodyMd(color: AppColors.primary)
                                   .copyWith(fontWeight: FontWeight.w600),
                             ),

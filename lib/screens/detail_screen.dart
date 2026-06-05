@@ -12,7 +12,8 @@ class DetailScreen extends StatefulWidget {
   State<DetailScreen> createState() => _DetailScreenState();
 }
 
-class _DetailScreenState extends State<DetailScreen> with SingleTickerProviderStateMixin {
+class _DetailScreenState extends State<DetailScreen>
+    with SingleTickerProviderStateMixin {
   // ── Controller ──────────────────────────────────────────────────────────
   late final DetailController _ctrl;
 
@@ -24,7 +25,10 @@ class _DetailScreenState extends State<DetailScreen> with SingleTickerProviderSt
   void initState() {
     super.initState();
     _ctrl = DetailController(receipt: widget.receipt);
-    _entryCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 500));
+    _entryCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 500),
+    );
     _fadeAnim = CurvedAnimation(parent: _entryCtrl, curve: Curves.easeOut);
     _entryCtrl.forward();
   }
@@ -44,223 +48,231 @@ class _DetailScreenState extends State<DetailScreen> with SingleTickerProviderSt
         backgroundColor: AppColors.surfaceContainerHigh,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
         title: Text('Hapus Struk?', style: AppTextStyles.headlineMd()),
-        content: Text('Data tidak dapat dipulihkan.', style: AppTextStyles.bodyMd()),
+        content: Text(
+          'Data tidak dapat dipulihkan.',
+          style: AppTextStyles.bodyMd(),
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: Text('Batal', style: GoogleFonts.inter(color: AppColors.onSurfaceVariant)),
+            child: Text(
+              'Batal',
+              style: GoogleFonts.inter(color: AppColors.onSurfaceVariant),
+            ),
           ),
           ElevatedButton(
             onPressed: () => Navigator.pop(context, true),
-            style: ElevatedButton.styleFrom(backgroundColor: AppColors.errorContainer, foregroundColor: AppColors.onErrorContainer, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
-            child: Text('Hapus', style: GoogleFonts.spaceGrotesk(fontWeight: FontWeight.w700)),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.errorContainer,
+              foregroundColor: AppColors.onErrorContainer,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
+            child: Text(
+              'Hapus',
+              style: GoogleFonts.spaceGrotesk(fontWeight: FontWeight.w700),
+            ),
           ),
         ],
       ),
     );
     if (confirmed == true && mounted) {
-      _ctrl.deleteReceipt();
-      Navigator.pop(context);
+      await _ctrl.deleteReceipt();
+      if (mounted) Navigator.pop(context);
     }
   }
 
   @override
   Widget build(BuildContext context) {
     final r = widget.receipt;
+
     return Scaffold(
       appBar: AppBar(
-        leading: IconButton(icon: const Icon(Icons.arrow_back), onPressed: () => Navigator.pop(context)),
-        title: const Text('ReceiptSync'),
-        actions: [IconButton(icon: const Icon(Icons.more_vert), onPressed: () {})],
+        title: const Text('Detail Struk'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.more_vert),
+            onPressed: () {
+              showModalBottomSheet(
+                context: context,
+                builder: (_) => Container(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      ListTile(
+                        leading: const Icon(Icons.delete_outline),
+                        title: const Text('Hapus'),
+                        onTap: () {
+                          Navigator.pop(context);
+                          _onDelete();
+                        },
+                      ),
+                      ListTile(
+                        leading: const Icon(Icons.share_outlined),
+                        title: const Text('Bagikan'),
+                        onTap: () {
+                          Navigator.pop(context);
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('Fitur bagikan belum tersedia'),
+                            ),
+                          );
+                        },
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
+        ],
       ),
       body: FadeTransition(
         opacity: _fadeAnim,
         child: SingleChildScrollView(
-          padding: const EdgeInsets.all(16),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-            _ReceiptImageCard(confidence: r.confidenceScore),
-            const SizedBox(height: 16),
-            _DetailCard(receipt: r),
-            const SizedBox(height: 80),
-          ]),
-        ),
-      ),
-      bottomNavigationBar: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-          child: Row(children: [
-            Expanded(
-              child: OutlinedButton.icon(
-                onPressed: () {},
-                icon: const Icon(Icons.edit_outlined, size: 18),
-                label: const Text('Edit Amount'),
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: AppColors.onSurface,
-                  side: const BorderSide(color: AppColors.outlineVariant),
-                  padding: const EdgeInsets.symmetric(vertical: 14),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                ),
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: ElevatedButton.icon(
-                onPressed: _onDelete,
-                icon: const Icon(Icons.delete_outline, size: 18),
-                label: const Text('Delete'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.errorContainer.withValues(alpha: 0.8),
-                  foregroundColor: AppColors.onErrorContainer,
-                  padding: const EdgeInsets.symmetric(vertical: 14),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                  elevation: 0,
-                ),
-              ),
-            ),
-          ]),
-        ),
-      ),
-    );
-  }
-}
-
-class _ReceiptImageCard extends StatelessWidget {
-  final double confidence;
-  const _ReceiptImageCard({required this.confidence});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      height: 260,
-      decoration: BoxDecoration(
-        color: AppColors.surfaceContainerHigh,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: AppColors.successGlint.withValues(alpha: 0.5), width: 2),
-      ),
-      clipBehavior: Clip.hardEdge,
-      child: Stack(children: [
-        Container(
-          decoration: const BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: [Color(0xFF252830), Color(0xFF1A1C24)],
-            ),
-          ),
-          child: CustomPaint(painter: _ReceiptTexturePainter()),
-        ),
-        Positioned(
-          left: 40, top: 20, right: 40, bottom: 60,
+          padding: const EdgeInsets.all(24),
           child: Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(24),
             decoration: BoxDecoration(
-              border: Border.all(color: AppColors.successGlint, width: 2),
-              borderRadius: BorderRadius.circular(4),
-            ),
-          ),
-        ),
-        Positioned(
-          top: 16, right: 16,
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-            decoration: BoxDecoration(
-              color: AppColors.surfaceContainerHigh.withValues(alpha: 0.9),
-              borderRadius: BorderRadius.circular(999),
-              border: Border.all(color: AppColors.successGlint.withValues(alpha: 0.6)),
-            ),
-            child: Row(mainAxisSize: MainAxisSize.min, children: [
-              Icon(Icons.check_circle, color: AppColors.successGlint, size: 14),
-              const SizedBox(width: 6),
-              Text(
-                'OCR ${(confidence * 100).toStringAsFixed(0)}% CONF',
-                style: AppTextStyles.labelCaps(color: AppColors.successGlint),
+              color: AppColors.surfaceContainerHigh,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(
+                color: AppColors.outlineVariant.withValues(alpha: 0.5),
               ),
-            ]),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.1),
+                  blurRadius: 10,
+                  offset: const Offset(0, 5),
+                ),
+              ],
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                const Icon(
+                  Icons.storefront,
+                  size: 64,
+                  color: AppColors.primary,
+                ),
+                const SizedBox(height: 16),
+                Text(
+                  r.merchantName ?? 'Unknown Merchant',
+                  style: AppTextStyles.headlineMd(),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  r.formattedDate,
+                  style: AppTextStyles.bodyMd(
+                    color: AppColors.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  r.formattedTime,
+                  style: AppTextStyles.bodyMd(
+                    color: AppColors.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(height: 24),
+                const Divider(thickness: 2),
+                const SizedBox(height: 16),
+                // Receipt details
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text('Receipt ID', style: AppTextStyles.bodyMd()),
+                    Expanded(
+                      child: Text(
+                        r.id,
+                        textAlign: TextAlign.right,
+                        style: AppTextStyles.bodyMd(
+                          color: AppColors.onSurfaceVariant,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text('Amount', style: AppTextStyles.bodyMd()),
+                    Text(r.formattedAmount, style: AppTextStyles.bodyMd()),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text('Confidence', style: AppTextStyles.bodyMd()),
+                    Text(r.confidencePercent, style: AppTextStyles.bodyMd()),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text('Status', style: AppTextStyles.bodyMd()),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 6,
+                      ),
+                      decoration: BoxDecoration(
+                        color: r.isSynced
+                            ? AppColors.tertiaryContainer
+                            : AppColors.errorContainer,
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Text(
+                        r.isSynced ? 'Synced' : 'Pending',
+                        style: AppTextStyles.label(
+                          color: r.isSynced
+                              ? AppColors.onTertiaryContainer
+                              : AppColors.onErrorContainer,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                const Divider(thickness: 2),
+                const SizedBox(height: 16),
+                // Total
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text('TOTAL', style: AppTextStyles.headlineMd()),
+                    Text(
+                      r.formattedAmount,
+                      style: AppTextStyles.headlineMd(color: AppColors.primary),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 32),
+                // Action buttons
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    onPressed: () => _onDelete(),
+                    icon: const Icon(Icons.delete_outline),
+                    label: const Text('Delete Receipt'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.errorContainer,
+                      foregroundColor: AppColors.onErrorContainer,
+                    ),
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
-      ]),
-    );
-  }
-}
-
-class _ReceiptTexturePainter extends CustomPainter {
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()..color = AppColors.onSurface.withValues(alpha: 0.04)..strokeWidth = 0.5;
-    for (double y = 20; y < size.height - 20; y += 14) {
-      final lineW = size.width * 0.5 + (size.width * 0.4 * ((y / size.height) % 1.0));
-      final x0 = (size.width - lineW) / 2;
-      canvas.drawLine(Offset(x0, y), Offset(x0 + lineW, y), paint);
-    }
-  }
-  @override
-  bool shouldRepaint(_) => false;
-}
-
-class _DetailCard extends StatelessWidget {
-  final Receipt receipt;
-  const _DetailCard({required this.receipt});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      decoration: BoxDecoration(
-        color: AppColors.surfaceContainerHigh,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: AppColors.outlineVariant.withValues(alpha: 0.5)),
       ),
-      padding: const EdgeInsets.all(20),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(children: [
-          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text('EXTRACTED TOTAL', style: AppTextStyles.labelCaps()),
-            const SizedBox(height: 4),
-            Text(receipt.formattedAmount, style: AppTextStyles.numericDisplay()),
-          ])),
-          _SyncStatusPill(isSynced: receipt.isSynced),
-        ]),
-        const SizedBox(height: 16),
-        const Divider(color: AppColors.outlineVariant, height: 1),
-        const SizedBox(height: 16),
-        _Row(label: 'Date', value: '${receipt.formattedDate} • ${receipt.formattedTime}'),
-        const SizedBox(height: 12),
-        _Row(label: 'Merchant', value: receipt.merchantName ?? 'Unknown'),
-        const SizedBox(height: 12),
-        _Row(label: 'Confidence', value: receipt.confidencePercent),
-      ]),
-    );
-  }
-}
-
-class _Row extends StatelessWidget {
-  final String label;
-  final String value;
-  const _Row({required this.label, required this.value});
-  @override
-  Widget build(BuildContext context) {
-    return Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-      Text(label, style: AppTextStyles.bodyMd()),
-      Text(value, style: AppTextStyles.bodyMd(color: AppColors.onSurface)),
-    ]);
-  }
-}
-
-class _SyncStatusPill extends StatelessWidget {
-  final bool isSynced;
-  const _SyncStatusPill({required this.isSynced});
-  @override
-  Widget build(BuildContext context) {
-    final color = isSynced ? AppColors.onSurfaceVariant : AppColors.syncStatusPending;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-      decoration: BoxDecoration(
-        color: (isSynced ? AppColors.surfaceContainerHighest : AppColors.syncStatusPending.withValues(alpha: 0.15)),
-        borderRadius: BorderRadius.circular(999),
-      ),
-      child: Row(mainAxisSize: MainAxisSize.min, children: [
-        Container(width: 8, height: 8, decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
-        const SizedBox(width: 6),
-        Text(isSynced ? 'Synced' : 'Pending Sync', style: AppTextStyles.label(color: color)),
-      ]),
     );
   }
 }

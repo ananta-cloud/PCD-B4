@@ -7,7 +7,7 @@ import 'package:image_picker/image_picker.dart';
 import '../core/app_colors.dart';
 import '../core/app_text_styles.dart';
 import '../models/receipt.dart';
-import '../repositories/mock_receipt_repository.dart';
+import '../repositories/receipt_repository.dart';
 import '../services/image_processing_service.dart';
 import '../services/ocr_service.dart';
 
@@ -153,7 +153,7 @@ class _ScanScreenState extends State<ScanScreen> with TickerProviderStateMixin {
     setState(() => _saving = true);
     await Future.delayed(const Duration(milliseconds: 300));
     if (!mounted) return;
-    MockReceiptRepository.addReceipt(Receipt(
+    await ReceiptRepository.addReceipt(Receipt(
       id: DateTime.now().millisecondsSinceEpoch.toString(), userId: 'user_001',
       totalAmount: _result!.total, confidenceScore: _result!.confidence,
       scannedAt: DateTime.now(), merchantName: 'Scanned Receipt',

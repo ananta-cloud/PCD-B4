@@ -28,6 +28,7 @@ class ParsedReceipt {
   final double? change;
   final String rawText;
   final double confidence;
+  final String currency;
 
   ParsedReceipt({
     required this.items,
@@ -37,6 +38,7 @@ class ParsedReceipt {
     this.change,
     required this.rawText,
     required this.confidence,
+    required this.currency,
   });
 
   bool get hasCashPayment => cash != null && cash! > 0;
@@ -66,6 +68,7 @@ class OcrService {
       change: parsed.change,
       rawText: rawText,
       confidence: confidence,
+      currency:'Rp',
     );
   }
 
@@ -131,10 +134,21 @@ class OcrService {
 
   static ParsedReceipt _parseReceipt(String text) {
     if (text.isEmpty) {
-      return ParsedReceipt(items: [], subtotal: 0, total: 0, rawText: text, confidence: 0);
+      return ParsedReceipt(
+        items: [],
+        subtotal: 0,
+        total: 0,
+        rawText: text,
+        confidence: 0,
+        currency: 'Rp',
+      );
     }
 
-    final lines = text.split('\n').map((l) => l.trim()).where((l) => l.isNotEmpty).toList();
+    final lines = text
+        .split('\n')
+        .map((l) => l.trim())
+        .where((l) => l.isNotEmpty)
+        .toList();
 
     // ── Step 1: Classify each line ──────────────────────────────────────────
     final classified = <_ClassifiedLine>[];
@@ -154,23 +168,27 @@ class OcrService {
         if (prev.type == _LineType.itemName || prev.type == _LineType.unknown) {
           final name = prev.text;
           if (name.isNotEmpty && !_isSkipLine(name)) {
-            items.add(ReceiptItem(
-              name: name,
-              qty: c.qty ?? 1,
-              unitPrice: c.unitPrice ?? c.price ?? 0,
-              totalPrice: c.price ?? (c.unitPrice ?? 0) * (c.qty ?? 1),
-            ));
+            items.add(
+              ReceiptItem(
+                name: name,
+                qty: c.qty ?? 1,
+                unitPrice: c.unitPrice ?? c.price ?? 0,
+                totalPrice: c.price ?? (c.unitPrice ?? 0) * (c.qty ?? 1),
+              ),
+            );
             // Mark prev as consumed
             classified[i - 1] = _ClassifiedLine(prev.text, _LineType.consumed);
           }
         }
       } else if (c.type == _LineType.fullItem) {
-        items.add(ReceiptItem(
-          name: c.itemName ?? c.text,
-          qty: c.qty ?? 1,
-          unitPrice: c.unitPrice ?? c.price ?? 0,
-          totalPrice: c.price ?? (c.unitPrice ?? 0) * (c.qty ?? 1),
-        ));
+        items.add(
+          ReceiptItem(
+            name: c.itemName ?? c.text,
+            qty: c.qty ?? 1,
+            unitPrice: c.unitPrice ?? c.price ?? 0,
+            totalPrice: c.price ?? (c.unitPrice ?? 0) * (c.qty ?? 1),
+          ),
+        );
       }
     }
 
@@ -214,7 +232,9 @@ class OcrService {
       // Sort to find the pattern: item prices → subtotal → total → cash → change
       // Heuristic: last number that's larger than total = cash, number after = change
       if (total == 0 || cash == null || change == null) {
-        _assignTrailingNumbers(trailingNumbers, items,
+        _assignTrailingNumbers(
+          trailingNumbers,
+          items,
           currentTotal: total,
           currentCash: cash,
           currentChange: change,
@@ -245,6 +265,7 @@ class OcrService {
       change: change,
       rawText: text,
       confidence: 0,
+      currency: 'Rp',
     );
   }
 
@@ -257,7 +278,12 @@ class OcrService {
     final keyword = _detectKeyword(lower);
     if (keyword != null) {
       final price = _extractNumber(line);
-      return _ClassifiedLine(line, _LineType.keyword, keyword: keyword, price: price);
+      return _ClassifiedLine(
+        line,
+        _LineType.keyword,
+        keyword: keyword,
+        price: price,
+      );
     }
 
     // Check for skip lines (address, phone, etc.)
@@ -266,16 +292,25 @@ class OcrService {
     }
 
     // Check for "NxPrice" pattern (qty line, e.g., "1x5.000", "2x 30.000", "3 x 15.000")
-    final qtyMatch = RegExp(r'^(\d+)\s*[xX×]\s*([\d.,]+)\s*$').firstMatch(line.trim());
+    final qtyMatch = RegExp(
+      r'^(\d+)\s*[xX×]\s*([\d.,]+)\s*$',
+    ).firstMatch(line.trim());
     if (qtyMatch != null) {
       final qty = int.tryParse(qtyMatch.group(1)!) ?? 1;
       final unitPrice = _parseNumber(qtyMatch.group(2)!);
-      return _ClassifiedLine(line, _LineType.qtyPrice,
-        qty: qty, unitPrice: unitPrice, price: unitPrice * qty);
+      return _ClassifiedLine(
+        line,
+        _LineType.qtyPrice,
+        qty: qty,
+        unitPrice: unitPrice,
+        price: unitPrice * qty,
+      );
     }
 
     // Check for full item line: "name  qty x price  total" or "name  qty x price"
-    final fullItemMatch = RegExp(r'(.+?)\s+(\d+)\s*[xX×]\s*([\d.,]+)(?:\s+([\d.,]+))?\s*$').firstMatch(line);
+    final fullItemMatch = RegExp(
+      r'(.+?)\s+(\d+)\s*[xX×]\s*([\d.,]+)(?:\s+([\d.,]+))?\s*$',
+    ).firstMatch(line);
     if (fullItemMatch != null) {
       final name = fullItemMatch.group(1)!.trim();
       final qty = int.tryParse(fullItemMatch.group(2)!) ?? 1;
@@ -283,24 +318,42 @@ class OcrService {
       final totalPrice = fullItemMatch.group(4) != null
           ? _parseNumber(fullItemMatch.group(4)!)
           : unitPrice * qty;
-      return _ClassifiedLine(line, _LineType.fullItem,
-        itemName: name, qty: qty, unitPrice: unitPrice, price: totalPrice);
+      return _ClassifiedLine(
+        line,
+        _LineType.fullItem,
+        itemName: name,
+        qty: qty,
+        unitPrice: unitPrice,
+        price: totalPrice,
+      );
     }
 
     // Check for number-only line (e.g., "35.000", "100.000")
     final numOnly = RegExp(r'^[\d.,]+$').firstMatch(line.trim());
     if (numOnly != null) {
-      return _ClassifiedLine(line, _LineType.numberOnly, price: _parseNumber(line.trim()));
+      return _ClassifiedLine(
+        line,
+        _LineType.numberOnly,
+        price: _parseNumber(line.trim()),
+      );
     }
 
     // Check for line with just "name  price" pattern
-    final namePriceMatch = RegExp(r'^(.+?)\s{2,}([\d.,]+)\s*$').firstMatch(line);
+    final namePriceMatch = RegExp(
+      r'^(.+?)\s{2,}([\d.,]+)\s*$',
+    ).firstMatch(line);
     if (namePriceMatch != null) {
       final name = namePriceMatch.group(1)!.trim();
       final price = _parseNumber(namePriceMatch.group(2)!);
       if (!RegExp(r'^\d').hasMatch(name) && price > 0) {
-        return _ClassifiedLine(line, _LineType.fullItem,
-          itemName: name, qty: 1, unitPrice: price, price: price);
+        return _ClassifiedLine(
+          line,
+          _LineType.fullItem,
+          itemName: name,
+          qty: 1,
+          unitPrice: price,
+          price: price,
+        );
       }
     }
 
@@ -320,8 +373,17 @@ class OcrService {
     final compact = lower.replaceAll(' ', '');
 
     // CHANGE / KEMBALIAN — check first (before cash, since "kembali" contains "ba")
-    if (_fuzzyMatch(compact, ['kembalian', 'kembali', 'kembal', 'kmbali', 'change']) ||
-        RegExp(r'k.{0,2}e.{0,2}m.{0,2}b.{0,2}a.{0,2}l', caseSensitive: false).hasMatch(compact)) {
+    if (_fuzzyMatch(compact, [
+          'kembalian',
+          'kembali',
+          'kembal',
+          'kmbali',
+          'change',
+        ]) ||
+        RegExp(
+          r'k.{0,2}e.{0,2}m.{0,2}b.{0,2}a.{0,2}l',
+          caseSensitive: false,
+        ).hasMatch(compact)) {
       return _Keyword.change;
     }
 
@@ -331,7 +393,12 @@ class OcrService {
     }
 
     // TOTAL
-    if (_fuzzyMatch(compact, ['grandtotal', 'totalbelanja', 'totalbayar', 'total']) ||
+    if (_fuzzyMatch(compact, [
+          'grandtotal',
+          'totalbelanja',
+          'totalbayar',
+          'total',
+        ]) ||
         RegExp(r't.?o.?t.?a.?[li1]', caseSensitive: false).hasMatch(compact) ||
         RegExp(r'[t1].?ota[li1]', caseSensitive: false).hasMatch(compact)) {
       // Avoid matching "subtotal" again
@@ -341,7 +408,14 @@ class OcrService {
     }
 
     // CASH / TUNAI / BAYAR
-    if (_fuzzyMatch(compact, ['tunai', 'cash', 'bayar', 'pembayaran', 'debit', 'kredit']) ||
+    if (_fuzzyMatch(compact, [
+          'tunai',
+          'cash',
+          'bayar',
+          'pembayaran',
+          'debit',
+          'kredit',
+        ]) ||
         RegExp(r'[cl]a[s5]h', caseSensitive: false).hasMatch(compact) ||
         RegExp(r'tun.?[ae]i', caseSensitive: false).hasMatch(compact)) {
       return _Keyword.cash;
@@ -421,7 +495,8 @@ class OcrService {
       // Cash: next number larger than total
       if (currentCash == null && summaryStart + 1 < numbers.length) {
         final possibleCash = numbers[summaryStart + 1];
-        if (possibleCash >= (currentTotal > 0 ? currentTotal : numbers[summaryStart])) {
+        if (possibleCash >=
+            (currentTotal > 0 ? currentTotal : numbers[summaryStart])) {
           onCash(possibleCash);
           summaryStart++;
         }
@@ -433,7 +508,8 @@ class OcrService {
     } else if (numbers.length >= 3) {
       // Fallback: assume last 3 numbers are total, cash, change
       if (currentTotal == 0) onTotal(numbers[numbers.length - 3]);
-      if (currentCash == null && numbers[numbers.length - 2] >= numbers[numbers.length - 3]) {
+      if (currentCash == null &&
+          numbers[numbers.length - 2] >= numbers[numbers.length - 3]) {
         onCash(numbers[numbers.length - 2]);
       }
       if (currentChange == null) onChange(numbers[numbers.length - 1]);
@@ -511,7 +587,17 @@ class OcrService {
 //  Internal Classification Types
 // ═══════════════════════════════════════════════════════════════════════════
 
-enum _LineType { itemName, qtyPrice, fullItem, numberOnly, keyword, skip, unknown, consumed }
+enum _LineType {
+  itemName,
+  qtyPrice,
+  fullItem,
+  numberOnly,
+  keyword,
+  skip,
+  unknown,
+  consumed,
+}
+
 enum _Keyword { subtotal, total, cash, change }
 
 class _ClassifiedLine {
@@ -523,7 +609,9 @@ class _ClassifiedLine {
   final double? unitPrice;
   final String? itemName;
 
-  _ClassifiedLine(this.text, this.type, {
+  _ClassifiedLine(
+    this.text,
+    this.type, {
     this.keyword,
     this.price,
     this.qty,
