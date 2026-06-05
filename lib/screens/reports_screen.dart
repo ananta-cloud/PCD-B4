@@ -5,6 +5,7 @@ import '../core/app_text_styles.dart';
 import '../repositories/receipt_repository.dart';
 import '../repositories/user_repository.dart';
 import '../services/mongo_service.dart';
+import '../controllers/auth_controller.dart';
 import 'login_screen.dart';
 
 class ReportsScreen extends StatelessWidget {
@@ -32,13 +33,11 @@ class ReportsScreen extends StatelessWidget {
           IconButton(
             icon: const Icon(Icons.logout, color: Colors.redAccent),
             onPressed: () async {
-              // 1. Logout dari MongoDB session (in-memory)
-              MongoService.logout();
+              // Gunakan AuthController untuk membersihkan semua state & session
+              final authCtrl = AuthController();
+              await authCtrl.logout();
 
-              // 2. Logout user dari Hive database
-              await UserRepository().logoutAllUsers();
-
-              // 2. Hapus semua riwayat navigasi dan kembali ke halaman Login
+              // Hapus semua riwayat navigasi dan kembali ke halaman Login
               if (context.mounted) {
                 Navigator.pushAndRemoveUntil(
                   context,

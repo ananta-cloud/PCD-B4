@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../services/mongo_service.dart';
 import '../services/hive_utils.dart';
+import 'package:hive/hive.dart';
 
 class AuthController extends ChangeNotifier {
   bool _isLoading = false;
@@ -36,7 +37,12 @@ class AuthController extends ChangeNotifier {
       bool success = await MongoService.loginUser(email, password);
 
       if (success) {
-        // Simpan sesi login ke Hive agar persisten
+        // Simpan sesi login ke Hive agar persisten (Untuk AuthGate)
+        var sessionBox = await Hive.openBox('session');
+        await sessionBox.put('userId', MongoService.currentUserId ?? email);
+        await sessionBox.put('email', MongoService.currentUserEmail ?? email);
+
+        // Simpan ke userRepository juga
         await HiveUtils.loginUser(
           email: email,
           name: MongoService.currentUserEmail ?? email,
@@ -52,6 +58,24 @@ class AuthController extends ChangeNotifier {
       _errorMessage = 'ERROR SERVER: $e';
       _setLoading(false);
       rethrow;
+    }
+  }
+
+  /// Melakukan proses logout
+  Future<void> logout() async {
+    _setLoading(true);
+    try {
+      // 1. Hapus session di Hive (Untuk AuthGate)
+      var sessionBox = await Hive.openBox('session');
+      await sessionBox.clear();
+
+      // 2. Logout dari User Repository
+      await HiveUtils.logoutCurrentUser();
+
+      // 3. Logout dari Mongo Service
+      MongoService.logout();
+    } finally {
+      _setLoading(false);
     }
   }
 }
