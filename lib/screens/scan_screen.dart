@@ -18,7 +18,9 @@ class ScanScreen extends StatelessWidget {
     );
     if (picked == null || !context.mounted) return;
     await Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => CropScreen(imageFile: File(picked.path))),
+      MaterialPageRoute(
+        builder: (_) => CropScreen(imageFile: File(picked.path)),
+      ),
     );
   }
 
@@ -30,7 +32,9 @@ class ScanScreen extends StatelessWidget {
     );
     if (picked == null || !context.mounted) return;
     await Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => CropScreen(imageFile: File(picked.path))),
+      MaterialPageRoute(
+        builder: (_) => CropScreen(imageFile: File(picked.path)),
+      ),
     );
   }
 
@@ -88,7 +92,7 @@ class ScanScreen extends StatelessWidget {
                 ),
               ),
 
-              const SizedBox(height: 48),
+              const SizedBox(height: 40),
 
               // ── Tombol Kamera ──────────────────────────────────────────────
               _ScanButton(
@@ -114,11 +118,14 @@ class ScanScreen extends StatelessWidget {
 
               // ── Tips ──────────────────────────────────────────────────────
               Container(
+                margin: const EdgeInsets.only(top: 2),
                 padding: const EdgeInsets.all(14),
                 decoration: BoxDecoration(
                   color: Colors.white.withValues(alpha: 0.04),
                   borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: Colors.white.withValues(alpha: 0.07)),
+                  border: Border.all(
+                    color: Colors.white.withValues(alpha: 0.07),
+                  ),
                 ),
                 child: Row(
                   children: [
@@ -180,7 +187,10 @@ class _ScanButton extends StatelessWidget {
           decoration: BoxDecoration(
             color: color.withValues(alpha: 0.1),
             borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: color.withValues(alpha: 0.35), width: 1.5),
+            border: Border.all(
+              color: color.withValues(alpha: 0.35),
+              width: 1.5,
+            ),
           ),
           child: Row(
             children: [

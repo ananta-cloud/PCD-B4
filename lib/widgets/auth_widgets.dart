@@ -82,7 +82,7 @@ class AuthAppLogo extends StatelessWidget {
         ],
       ),
       child: const Icon(
-        Icons.manage_accounts_outlined,
+        Icons.receipt_long,
         color: AppColors.primary,
         size: 32,
       ),
@@ -96,7 +96,7 @@ class AuthAppLogo extends StatelessWidget {
 class AuthTextField extends StatelessWidget {
   final TextEditingController controller;
   final String hintText;
-  final IconData prefixIcon;
+  final IconData? prefixIcon;
   final bool obscureText;
   final TextInputType? keyboardType;
   final Widget? suffixIcon;
@@ -105,7 +105,7 @@ class AuthTextField extends StatelessWidget {
     super.key,
     required this.controller,
     required this.hintText,
-    required this.prefixIcon,
+    this.prefixIcon,
     this.obscureText = false,
     this.keyboardType,
     this.suffixIcon,
@@ -122,22 +122,23 @@ class AuthTextField extends StatelessWidget {
       decoration: InputDecoration(
         hintText: hintText,
         hintStyle: AppTextStyles.bodyMd(color: AppColors.outline),
-        prefixIcon: Padding(
-          padding: const EdgeInsets.only(left: 4),
-          child: Icon(prefixIcon, color: AppColors.onSurfaceVariant, size: 20),
-        ),
+        prefixIcon: prefixIcon != null ? Icon(prefixIcon) : null,
         suffixIcon: suffixIcon,
         filled: true,
         fillColor: AppColors.surfaceContainerHighest,
-        contentPadding: const EdgeInsets.symmetric(vertical: 16, horizontal: 16),
+        contentPadding: const EdgeInsets.symmetric(
+          vertical: 16,
+          horizontal: 16,
+        ),
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(14),
           borderSide: BorderSide(color: AppColors.outlineVariant),
         ),
         enabledBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(14),
-          borderSide:
-              BorderSide(color: AppColors.outlineVariant.withValues(alpha: 0.6)),
+          borderSide: BorderSide(
+            color: AppColors.outlineVariant.withValues(alpha: 0.6),
+          ),
         ),
         focusedBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(14),
@@ -173,8 +174,9 @@ class AuthPrimaryButton extends StatelessWidget {
         style: ElevatedButton.styleFrom(
           backgroundColor: AppColors.primaryContainer,
           foregroundColor: AppColors.onPrimaryContainer,
-          disabledBackgroundColor:
-              AppColors.primaryContainer.withValues(alpha: 0.6),
+          disabledBackgroundColor: AppColors.primaryContainer.withValues(
+            alpha: 0.6,
+          ),
           elevation: 0,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(16),
@@ -286,10 +288,26 @@ class _GoogleLogoPainter extends CustomPainter {
     final radius = size.width / 2 - 2;
 
     final segments = [
-      (_GoogleSegment(color: const Color(0xFF4285F4), start: -_pi / 2, sweep: _pi / 2)),
-      (_GoogleSegment(color: const Color(0xFF34A853), start: 0, sweep: _pi / 2)),
-      (_GoogleSegment(color: const Color(0xFFFBBC05), start: _pi / 2, sweep: _pi / 4)),
-      (_GoogleSegment(color: const Color(0xFFEA4335), start: 3 * _pi / 4, sweep: 3 * _pi / 4)),
+      (_GoogleSegment(
+        color: const Color(0xFF4285F4),
+        start: -_pi / 2,
+        sweep: _pi / 2,
+      )),
+      (_GoogleSegment(
+        color: const Color(0xFF34A853),
+        start: 0,
+        sweep: _pi / 2,
+      )),
+      (_GoogleSegment(
+        color: const Color(0xFFFBBC05),
+        start: _pi / 2,
+        sweep: _pi / 4,
+      )),
+      (_GoogleSegment(
+        color: const Color(0xFFEA4335),
+        start: 3 * _pi / 4,
+        sweep: 3 * _pi / 4,
+      )),
     ];
 
     for (final seg in segments) {
@@ -316,7 +334,11 @@ class _GoogleSegment {
   final Color color;
   final double start;
   final double sweep;
-  const _GoogleSegment({required this.color, required this.start, required this.sweep});
+  const _GoogleSegment({
+    required this.color,
+    required this.start,
+    required this.sweep,
+  });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -343,7 +365,11 @@ class AuthBiometricButton extends StatelessWidget {
         child: Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            const Icon(Icons.fingerprint, color: AppColors.onSurfaceVariant, size: 24),
+            const Icon(
+              Icons.fingerprint,
+              color: AppColors.onSurfaceVariant,
+              size: 24,
+            ),
             const SizedBox(width: 10),
             Text(
               'Biometric Login',

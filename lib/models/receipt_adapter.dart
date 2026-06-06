@@ -26,7 +26,6 @@ class ReceiptAdapter extends TypeAdapter<Receipt> {
       confidenceScore: fields[3] as double,
       scannedAt: DateTime.fromMillisecondsSinceEpoch(fields[4] as int),
       isSynced: fields[5] as bool,
-      merchantName: fields[6] as String?,
       imagePath: fields[7] as String?,
     );
   }
@@ -54,8 +53,6 @@ class ReceiptAdapter extends TypeAdapter<Receipt> {
     writer.write(obj.isSynced);
     // Field 6: merchantName
     writer.writeByte(6);
-    writer.write(obj.merchantName);
-    // Field 7: imagePath
     writer.writeByte(7);
     writer.write(obj.imagePath);
   }

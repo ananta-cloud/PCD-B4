@@ -1,5 +1,7 @@
 import 'package:hive/hive.dart';
 import '../models/receipt.dart';
+import '../models/receipt_adapter.dart';
+import '../services/mongo_service.dart';
 import '../services/hive_service.dart';
 
 /// Repository untuk akses data Receipt menggunakan Hive local database.
@@ -13,6 +15,7 @@ import '../services/hive_service.dart';
 class ReceiptRepository {
   /// Mendapatkan Hive box
   static Box<Receipt> get _box => HiveService.receiptsBox;
+  static List<Receipt> get allReceipts => getAll();
 
   // ── CRUD Operations ────────────────────────────────────────────────────
 
@@ -110,17 +113,6 @@ class ReceiptRepository {
     // Sort by date (terbaru duluan)
     receipts.sort((a, b) => b.scannedAt.compareTo(a.scannedAt));
     return receipts;
-  }
-
-  /// Cari receipt berdasarkan merchant name
-  static List<Receipt> searchByMerchant(String query) {
-    final searchLower = query.toLowerCase();
-    return _box.values
-        .where(
-          (r) => r.merchantName?.toLowerCase().contains(searchLower) ?? false,
-        )
-        .toList()
-      ..sort((a, b) => b.scannedAt.compareTo(a.scannedAt));
   }
 
   /// Cari receipts berdasarkan user ID
@@ -311,5 +303,18 @@ class ReceiptRepository {
     print(
       'Average confidence: ${(averageConfidence * 100).toStringAsFixed(1)}%',
     );
+  }
+
+  static List<Receipt> getAllForCurrentUser() {
+    final currentUserId = MongoService.currentUserId;
+    if (currentUserId == null) return [];
+
+    // Filter di sisi Hive (Local)
+    final allReceipts = _box.values.toList();
+    final userReceipts = allReceipts.where((r) => r.userId == currentUserId).toList();
+    
+    // Urutkan dari yang terbaru
+    userReceipts.sort((a, b) => b.scannedAt.compareTo(a.scannedAt));
+    return userReceipts;
   }
 }

@@ -100,8 +100,6 @@ class _LoginScreenState extends State<LoginScreen>
                       AuthAppLogo(),
                       const SizedBox(height: 20),
                       Text('ReceiptSync', style: AppTextStyles.headlineXl()),
-                      const SizedBox(height: 8),
-                      Text('Intelligent edge extraction.', style: AppTextStyles.bodyMd()),
                       const SizedBox(height: 48),
                       // Form card
                       Container(
@@ -125,22 +123,9 @@ class _LoginScreenState extends State<LoginScreen>
                             ),
                             const SizedBox(height: 20),
                             Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              mainAxisAlignment: MainAxisAlignment.start,
                               children: [
                                 Text('PASSWORD', style: AppTextStyles.labelCaps()),
-                                TextButton(
-                                  onPressed: () {},
-                                  style: TextButton.styleFrom(
-                                    padding: EdgeInsets.zero,
-                                    minimumSize: Size.zero,
-                                    tapTargetSize:
-                                        MaterialTapTargetSize.shrinkWrap,
-                                  ),
-                                  child: Text(
-                                    'Forgot?',
-                                    style: AppTextStyles.label(color: AppColors.primary),
-                                  ),
-                                ),
                               ],
                             ),
                             const SizedBox(height: 8),

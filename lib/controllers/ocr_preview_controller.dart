@@ -35,7 +35,6 @@ class OcrPreviewController extends ChangeNotifier {
         confidenceScore: parsedReceipt.confidence,
         scannedAt: DateTime.now(),
         isSynced: false,
-        merchantName: 'Scanned Receipt',
         imagePath: croppedFile.path,
       );
 
@@ -45,7 +44,6 @@ class OcrPreviewController extends ChangeNotifier {
       // Auto-sync ke MongoDB
       try {
         final synced = await MongoService.insertReceipt(
-          receipt.merchantName ?? 'Scanned Receipt',
           receipt.totalAmount,
         );
         if (synced) {

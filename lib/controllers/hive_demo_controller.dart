@@ -31,7 +31,6 @@ class HiveDemoController {
         confidenceScore: 0.92,
         scannedAt: DateTime.now(),
         isSynced: false,
-        merchantName: 'Alfamart',
         imagePath: '/path/to/image.jpg',
       );
 
@@ -54,9 +53,6 @@ class HiveDemoController {
 
       for (int i = 0; i < receipts.length && i < 5; i++) {
         final r = receipts[i];
-        print(
-          '${i + 1}. ${r.merchantName ?? 'Unknown'} - ${r.formattedAmount}',
-        );
         print(
           '   Synced: ${r.isSynced ? '✓' : '✗'} | Confidence: ${r.confidencePercent}',
         );
@@ -122,16 +118,6 @@ class HiveDemoController {
       final highest = ReceiptRepository.getHighestAmountReceipt();
       final lowest = ReceiptRepository.getLowestAmountReceipt();
 
-      if (highest != null) {
-        print(
-          '\nHighest: ${highest.merchantName} - Rp ${highest.totalAmount.toStringAsFixed(0)}',
-        );
-      }
-      if (lowest != null) {
-        print(
-          'Lowest: ${lowest.merchantName} - Rp ${lowest.totalAmount.toStringAsFixed(0)}',
-        );
-      }
     } catch (e) {
       print('✗ Error: $e');
       onError?.call(e);
@@ -291,7 +277,6 @@ class HiveDemoController {
           confidenceScore: 0.75 + (i * 0.02),
           scannedAt: now.subtract(Duration(days: i)),
           isSynced: i % 2 == 0,
-          merchantName: merchants[i % merchants.length],
           imagePath: '/path/to/image_$i.jpg',
         );
         await ReceiptRepository.addReceipt(receipt);

@@ -6,6 +6,7 @@ import '../models/receipt.dart';
 import 'detail_screen.dart';
 import '../repositories/receipt_repository.dart';
 import '../services/hive_utils.dart';
+import '../services/mongo_service.dart';
 
 class HistoryScreen extends StatefulWidget {
   const HistoryScreen({super.key});
@@ -24,9 +25,31 @@ class _HistoryScreenState extends State<HistoryScreen> {
     _load();
   }
 
-  void _load() {
+  Future<void> _initAndLoad() async {
+    // 1. Pastikan session user ada
+    if (MongoService.currentUserId == null) {
+      await MongoService.restoreSession();
+    }
+
+    // 2. PENTING: Tarik data dari MongoDB ke Hive dulu
+    try {
+      await MongoService.syncFromMongo(); 
+    } catch (e) {
+      print("Gagal sync dari cloud: $e");
+    }
+
+    // 3. Baru load data ke UI
+    _load();
+  }
+
+  void _load() async {
+    print("DEBUG: UserID saat ini: ${MongoService.currentUserId}");
+    
+    final receipts = ReceiptRepository.getAllForCurrentUser();
+    print("DEBUG: Jumlah struk ditemukan di Hive untuk user ini: ${receipts.length}");
+
     setState(() {
-      _receiptsFuture = Future.value(ReceiptRepository.getAll());
+       _receiptsFuture = Future.value(receipts);
     });
   }
 
@@ -258,7 +281,6 @@ class _ReceiptCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final merchantName = receipt.merchantName ?? "Unknown";
     final formattedAmount = receipt.formattedAmount;
     final isSynced = receipt.isSynced;
 
@@ -282,7 +304,6 @@ class _ReceiptCard extends StatelessWidget {
                 children: [
                   Text(formattedAmount, style: AppTextStyles.headlineMd()),
                   const SizedBox(height: 4),
-                  Text(merchantName, style: AppTextStyles.bodyMd()),
                 ],
               ),
             ),
