@@ -5,12 +5,7 @@ import 'package:camera/camera.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../controllers/scan_controller.dart';
-import '../services/image_processing_service.dart';
-import '../services/ocr_service.dart';
 import 'crop_screen.dart';
-
-enum _ScanPhase { idle, processing, result }
-enum _ImageView { original, processed }
 
 class ScanScreen extends StatefulWidget {
   const ScanScreen({super.key});
@@ -26,15 +21,6 @@ class _ScanScreenState extends State<ScanScreen>
 
   final _scanController = ScanController();
   final _picker = ImagePicker();
-
-  // ── Processing state ───────────────────────────────────────────────────
-  _ScanPhase _phase = _ScanPhase.idle;
-  _ImageView _imageView = _ImageView.original;
-  String _processingStep = '';
-  File? _originalFile;
-  File? _grayscaleFile;
-  File? _thresholdFile;
-  ParsedReceipt? _ocrResult;
 
   @override
   void initState() {
@@ -58,225 +44,6 @@ class _ScanScreenState extends State<ScanScreen>
       _scanController.initCamera();
     }
   }
-      _stopRealtimeOcr();
-      _cameraCtrl?.dispose();
-      if (mounted) setState(() => _isCameraReady = false);
-    } else if (state == AppLifecycleState.resumed && !_isCameraReady) {
-      _initCamera();
-    }
-  }
-
-  // ── Pick image ──────────────────────────────────────────────────────────
-  Future<void> _pickImage(ImageSource source) async {
-    final picked = await _picker.pickImage(
-      source: source,
-      maxWidth: 1200,
-      imageQuality: 85,
-    );
-    if (picked == null || !mounted) return;
-    _processImage(File(picked.path));
-  }
-
-  // ── Processing pipeline ─────────────────────────────────────────────────
-  // ── Processing pipeline ─────────────────────────────────────────────────
-  Future<void> _processImage(File file) async {
-    setState(() {
-      _phase = _ScanPhase.processing;
-      _originalFile = file;
-      _processingStep = 'Konversi grayscale...';
-    });
-
-    try {
-      // Step 1: Grayscale (Menggunakan service PCD kamu)
-      final grayFile = await ImageProcessingService.convertToGrayscale(file);
-      if (!mounted) return;
-      setState(() {
-        _grayscaleFile = grayFile;
-        _processingStep = 'Binary thresholding...';
-      });
-
-      // Step 2: Threshold (Menggunakan service PCD kamu)
-      final threshFile = await ImageProcessingService.applyThreshold(grayFile);
-      if (!mounted) return;
-      setState(() {
-        _thresholdFile = threshFile;
-        _processingStep = 'Mendeteksi area dengan AI YOLOv8...'; // Status update UI
-      });
-
-      // ── INJEKSI LOGIKA DETEKSI YOLOv8 DI SINI ──
-      List<Rect> itemBoxes = [];
-      Rect? totalBox;
-
-      try {
-        // Panggil fungsi inferensi dari library YOLOv8 TFLite yang kamu gunakan pada file threshold, contoh:
-        // final yoloInference = await myYoloModel.runOnImage(threshFile.path);
-        
-        // Lakukan perulangan hasil prediksi untuk memisahkan kotak koordinat:
-        /*
-        for (var detection in yoloInference) {
-          if (detection.label == 'item_belanja') {
-            itemBoxes.add(detection.boundingBox);
-          } else if (detection.label == 'total') {
-            totalBox = detection.boundingBox;
-          }
-        }
-        */
-      } catch (yoloError) {
-        debugPrint('YOLO gagal mendeteksi, mengaktifkan mode fallback OCR penuh: $yoloError');
-      }
-
-      // Step 3: Jalankan OCR dengan melemparkan saringan kotak koordinat dari YOLO
-      setState(() {
-        _processingStep = 'Menjalankan OCR...';
-      });
-
-      final result = await OcrService.processImage(
-        threshFile, // Gambar hasil PCD biner yang kontrasnya tajam
-        itemBoxes: itemBoxes,
-        totalBox: totalBox,
-      );
-      if (!mounted) return;
-
-      // ── FLOW ORIGINAL KAMU ──
-      // Mengubah state internal agar UI lokal langsung merespons perubahan ke halaman hasil
-      setState(() {
-        _ocrResult = result;
-        _phase = _ScanPhase.result;
-        _imageView = _ImageView.original;
-      });
-      HapticFeedback.mediumImpact();
-      
-    } catch (e) {
-      if (!mounted) return;
-      _showError('Gagal memproses gambar: $e');
-      setState(() => _phase = _ScanPhase.idle);
-    }
-  }
-
-  void _showError(String message) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message)),
-    );
-  }
-
-  // ── Camera init ────────────────────────────────────────────────────────
-
-  Future<void> _initCamera() async {
-    try {
-      final cameras = await availableCameras();
-      if (cameras.isEmpty || !mounted) return;
-
-      final camera = cameras.firstWhere(
-        (c) => c.lensDirection == CameraLensDirection.back,
-        orElse: () => cameras[0],
-      );
-
-      final ctrl = CameraController(
-        camera,
-        ResolutionPreset.medium, // medium cukup untuk OCR, hemat baterai
-        enableAudio: false,
-        imageFormatGroup: ImageFormatGroup.jpeg,
-      );
-
-      await ctrl.initialize();
-      // Pastikan flash mati — tidak auto-nyala meski gelap
-      await ctrl.setFlashMode(FlashMode.off);
-      // Aktifkan continuous auto-focus agar selalu tajam
-      await ctrl.setFocusMode(FocusMode.auto);
-      if (!mounted) return;
-
-      _cameraCtrl = ctrl;
-      setState(() => _isCameraReady = true);
-
-      // Mulai real-time OCR setelah kamera siap
-      _startRealtimeOcr();
-    } catch (e) {
-      debugPrint('❌ Camera init error: $e');
-    }
-  }
-
-  // ── Real-time OCR (tiap 1.5 detik) ────────────────────────────────────
-
-  void _startRealtimeOcr() {
-    _ocrTimer?.cancel();
-    // Interval 2.5 detik — cukup untuk OCR + kamera re-focus sebelum frame berikutnya
-    _ocrTimer = Timer.periodic(const Duration(milliseconds: 2500), (_) {
-      _runOcrOnFrame();
-    });
-  }
-
-  void _stopRealtimeOcr() {
-    _ocrTimer?.cancel();
-    _ocrTimer = null;
-  }
-
-  Future<void> _runOcrOnFrame() async {
-    if (_isOcrRunning || _isCapturing) return;
-    if (_cameraCtrl == null || !_cameraCtrl!.value.isInitialized) return;
-
-    _isOcrRunning = true;
-    String? tempPath;
-    try {
-      // Gunakan takePicture tapi dengan resolusi medium agar tidak ganggu AF
-      final xfile = await _cameraCtrl!.takePicture();
-      tempPath = xfile.path;
-      final inputImage = InputImage.fromFilePath(tempPath);
-      final result = await _textRecognizer.processImage(inputImage);
-
-      final confidence = _computeConfidence(result);
-      final blockCount = result.blocks.length;
-
-      if (mounted) {
-        setState(() {
-          _confidence = confidence;
-          _textBlockCount = blockCount;
-          _hasTextInFrame = blockCount > 0;
-        });
-      }
-    } catch (_) {
-      // Skip frame ini
-    } finally {
-      // Hapus temp file
-      if (tempPath != null) {
-        try { File(tempPath).deleteSync(); } catch (_) {}
-      }
-      // Trigger re-focus setelah OCR selesai
-      try {
-        if (_cameraCtrl != null && _cameraCtrl!.value.isInitialized) {
-          await _cameraCtrl!.setFocusMode(FocusMode.auto);
-        }
-      } catch (_) {}
-      _isOcrRunning = false;
-    }
-  }
-
-  /// Hitung confidence 0.0–1.0 dari RecognizedText
-  double _computeConfidence(RecognizedText text) {
-    if (text.blocks.isEmpty) return 0.0;
-
-    double total = 0;
-    int count = 0;
-    for (final block in text.blocks) {
-      for (final line in block.lines) {
-        for (final el in line.elements) {
-          final c = el.confidence;
-          if (c != null) {
-            total += c;
-            count++;
-          }
-        }
-      }
-    }
-
-    if (count > 0) return (total / count).clamp(0.0, 1.0);
-
-    // Fallback: estimasi dari jumlah karakter terbaca
-    final charCount = text.text.length;
-    return (charCount / 200.0).clamp(0.0, 1.0);
-  }
-
-  // ── Capture ────────────────────────────────────────────────────────────
 
   // ── Capture ────────────────────────────────────────────────────────────
 
@@ -284,17 +51,10 @@ class _ScanScreenState extends State<ScanScreen>
     HapticFeedback.mediumImpact();
     final file = await _scanController.captureImage();
     if (file != null && mounted) {
-      // UPDATE DI SINI: Berikan tipe data <File> saat melakukan Navigator.push
-      // Pastikan di dalam CropScreen milikmu, saat tombol "Selesai/Crop" ditekan, 
-      // kamu memanggil: Navigator.pop(context, fileHasilCrop);
-      final File? croppedResult = await Navigator.of(context).push<File>(
+      // Navigate to CropScreen — CropScreen handles processing & OCR internally
+      await Navigator.of(context).push<void>(
         MaterialPageRoute(builder: (_) => CropScreen(imageFile: file)),
       );
-
-      // Jika user tidak membatalkan crop, jalankan pipeline pemrosesan
-      if (croppedResult != null && mounted) {
-        _processImage(croppedResult);
-      }
     } else if (mounted && _scanController.cameraCtrl != null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Gagal mengambil foto')),
@@ -316,15 +76,13 @@ class _ScanScreenState extends State<ScanScreen>
       _scanController.startRealtimeOcr();
       return;
     }
-    
-    // UPDATE DI SINI: Lakukan hal yang sama untuk pengambilan dari galeri
-    final File? croppedResult = await Navigator.of(context).push<File>(
+
+    // Navigate to CropScreen — CropScreen handles processing & OCR internally
+    await Navigator.of(context).push<void>(
       MaterialPageRoute(builder: (_) => CropScreen(imageFile: File(picked.path))),
     );
-    
-    if (croppedResult != null && mounted) {
-      _processImage(croppedResult);
-    } else if (mounted) {
+
+    if (mounted) {
       _scanController.startRealtimeOcr();
     }
   }
@@ -443,10 +201,10 @@ class _ScanScreenState extends State<ScanScreen>
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
             colors: [
-              Colors.black.withOpacity(0.65),
+              Colors.black.withValues(alpha: 0.65),
               Colors.transparent,
               Colors.transparent,
-              Colors.black.withOpacity(0.70),
+              Colors.black.withValues(alpha: 0.70),
             ],
             stops: const [0.0, 0.22, 0.65, 1.0],
           ),
@@ -478,9 +236,9 @@ class _ScanScreenState extends State<ScanScreen>
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
               decoration: BoxDecoration(
-                color: Colors.black.withOpacity(0.55),
+                color: Colors.black.withValues(alpha: 0.55),
                 borderRadius: BorderRadius.circular(20),
-                border: Border.all(color: Colors.white.withOpacity(0.18)),
+                border: Border.all(color: Colors.white.withValues(alpha: 0.18)),
               ),
               child: Row(
                 mainAxisSize: MainAxisSize.min,
@@ -585,14 +343,14 @@ class _ScanGuidePainter extends CustomPainter {
       ..addRect(Rect.fromLTWH(0, 0, w, h))
       ..addRRect(rrect)
       ..fillType = PathFillType.evenOdd;
-    canvas.drawPath(overlay, Paint()..color = Colors.black.withOpacity(0.52));
+    canvas.drawPath(overlay, Paint()..color = Colors.black.withValues(alpha: 0.52));
 
     // ── Border warna sesuai status ──
     final borderColor = _frameColor();
     canvas.drawRRect(
       rrect,
       Paint()
-        ..color = borderColor.withOpacity(0.6)
+        ..color = borderColor.withValues(alpha: 0.6)
         ..strokeWidth = 1.5
         ..style = PaintingStyle.stroke,
     );
@@ -677,9 +435,9 @@ class _ConfidencePill extends StatelessWidget {
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
           decoration: BoxDecoration(
-            color: Colors.black.withOpacity(0.6),
+            color: Colors.black.withValues(alpha: 0.6),
             borderRadius: BorderRadius.circular(24),
-            border: Border.all(color: color.withOpacity(0.5), width: 1.2),
+            border: Border.all(color: color.withValues(alpha: 0.5), width: 1.2),
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
@@ -708,7 +466,7 @@ class _ConfidencePill extends StatelessWidget {
               child: LinearProgressIndicator(
                 value: confidence.clamp(0.0, 1.0),
                 minHeight: 4,
-                backgroundColor: Colors.white.withOpacity(0.15),
+                backgroundColor: Colors.white.withValues(alpha: 0.15),
                 valueColor: AlwaysStoppedAnimation<Color>(color),
               ),
             ),
@@ -755,7 +513,7 @@ class _CaptureButton extends StatelessWidget {
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
                 color: isCapturing
-                    ? Colors.white.withOpacity(0.45)
+                    ? Colors.white.withValues(alpha: 0.45)
                     : Colors.white,
               ),
               child: isCapturing
@@ -802,10 +560,10 @@ class _CircleIconButton extends StatelessWidget {
           width: size,
           height: size,
           decoration: BoxDecoration(
-            color: Colors.black.withOpacity(0.5),
+            color: Colors.black.withValues(alpha: 0.5),
             shape: BoxShape.circle,
             border: Border.all(
-              color: Colors.white.withOpacity(0.25),
+              color: Colors.white.withValues(alpha: 0.25),
               width: 1.5,
             ),
           ),

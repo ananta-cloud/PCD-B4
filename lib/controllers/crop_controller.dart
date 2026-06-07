@@ -1,6 +1,8 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:image/image.dart' as img;
+import '../services/image_processing_service.dart';
+import '../services/yolo_service.dart';
 import '../services/ocr_service.dart';
 import '../models/receipt.dart';
 
@@ -44,6 +46,10 @@ class CropController extends ChangeNotifier {
       final cropH = h * 0.70;
       _cropTopLeft = Offset((w - cropW) / 2, (h - cropH) / 2);
       _cropSize = Size(cropW, cropH);
+      
+      // Init YOLO in background
+      YoloService.init();
+      
       _isLoading = false;
       notifyListeners();
     } catch (e) {
@@ -179,10 +185,38 @@ class CropController extends ChangeNotifier {
       final croppedFile = File(tempPath)
         ..writeAsBytesSync(img.encodeJpg(croppedImg, quality: 92));
 
+      _processingStep = 'Konversi grayscale...';
+      notifyListeners();
+      final grayFile = await ImageProcessingService.convertToGrayscale(croppedFile);
+
+      _processingStep = 'Binary thresholding...';
+      notifyListeners();
+      final threshFile = await ImageProcessingService.applyThreshold(grayFile);
+
+      _processingStep = 'Mendeteksi area dengan AI YOLOv8...';
+      notifyListeners();
+      
+      final detections = await YoloService.detect(threshFile);
+      
+      List<Rect> itemBoxes = [];
+      Rect? totalBox;
+      
+      for (var d in detections) {
+        if (d.label == 'item_belanja') {
+          itemBoxes.add(d.boundingBox);
+        } else if (d.label == 'total') {
+          totalBox = d.boundingBox; // Assume the one with highest confidence or last detected
+        }
+      }
+
       _processingStep = 'Menjalankan OCR...';
       notifyListeners();
 
-      final parsedReceipt = await OcrService.processImage(croppedFile);
+      final parsedReceipt = await OcrService.processImage(
+        threshFile,
+        itemBoxes: itemBoxes,
+        totalBox: totalBox,
+      );
       
       _isProcessing = false;
       notifyListeners();

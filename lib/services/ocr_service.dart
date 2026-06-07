@@ -107,13 +107,27 @@ class OcrService {
       finalTotal = _findLargestNumber(allLines);
     }
 
+    // Teks yang akan ditampilkan di Tab "Teks OCR"
+    String displayedRawText = '';
+    if (itemLines.isNotEmpty || totalLines.isNotEmpty) {
+      if (itemLines.isNotEmpty) {
+        displayedRawText += "--- AREA ITEM BELANJA (YOLO) ---\n" + itemLines.join('\n') + "\n\n";
+      }
+      if (totalLines.isNotEmpty) {
+        displayedRawText += "--- AREA TOTAL (YOLO) ---\n" + totalLines.join('\n');
+      }
+    } else {
+      // Jika YOLO meleset/tidak mendeteksi, tampilkan semua teks sebagai fallback
+      displayedRawText = "--- SELURUH TEKS (YOLO Tidak Mendeteksi Area) ---\n" + recognizedText.text;
+    }
+
     return ParsedReceipt(
       items: parsed.items,
       subtotal: parsed.subtotal,
       total: finalTotal,
       cash: parsed.cash,
       change: parsed.change,
-      rawText: recognizedText.text, // Tetap simpan teks utuh untuk keperluan debugging/log
+      rawText: displayedRawText.trim(),
       confidence: confidence,
       currency: 'Rp',
     );
