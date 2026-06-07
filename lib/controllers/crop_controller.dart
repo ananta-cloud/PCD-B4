@@ -196,7 +196,9 @@ class CropController extends ChangeNotifier {
       _processingStep = 'Mendeteksi area dengan AI YOLOv8...';
       notifyListeners();
       
-      final detections = await YoloService.detect(threshFile);
+      // YOLO bekerja jauh lebih baik dengan gambar asli (RGB) dibandingkan gambar hitam putih (threshold)
+      // Karena gambar threshold membuang banyak detail tekstur/warna yang dibutuhkan model AI.
+      final detections = await YoloService.detect(croppedFile);
       
       List<Rect> itemBoxes = [];
       Rect? totalBox;

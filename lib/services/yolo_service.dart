@@ -13,7 +13,6 @@ class YoloDetection {
 }
 
 class YoloService {
-  static Interpreter? _interpreter;
   static const List<String> _labels = [
     'info_toko',
     'item_belanja',
@@ -22,21 +21,16 @@ class YoloService {
   ];
 
   static Future<void> init() async {
-    if (_interpreter != null) return;
-    try {
-      final options = InterpreterOptions()..threads = 4;
-      _interpreter = await Interpreter.fromAsset('assets/ml/best_int8.tflite', options: options);
-      debugPrint('✅ YOLO Model loaded successfully');
-    } catch (e) {
-      debugPrint('❌ Failed to load YOLO model: $e');
-    }
+    // Fungsi ini dikosongkan. 
+    // Kita akan me-load model pada saat 'detect' dipanggil agar terhindar dari state error.
   }
 
   static Future<List<YoloDetection>> detect(File imageFile) async {
-    if (_interpreter == null) await init();
-    if (_interpreter == null) return [];
-
+    Interpreter? interpreter;
     try {
+      final options = InterpreterOptions()..threads = 4;
+      interpreter = await Interpreter.fromAsset('assets/ml/best_int8.tflite', options: options);
+      
       // 1. Load image
       final bytes = await imageFile.readAsBytes();
       final originalImage = img.decodeImage(bytes);
@@ -46,7 +40,7 @@ class YoloService {
       final origH = originalImage.height.toDouble();
 
       // 2. Prepare input
-      final inputTensor = _interpreter!.getInputTensor(0);
+      final inputTensor = interpreter.getInputTensor(0);
       final inputShape = inputTensor.shape; // e.g., [1, 640, 640, 3]
       final inputSize = inputShape[1]; // assuming square 640x640
 
@@ -81,7 +75,7 @@ class YoloService {
       }
 
       // 3. Prepare output
-      final outputTensor = _interpreter!.getOutputTensor(0);
+      final outputTensor = interpreter.getOutputTensor(0);
       final outputShape = outputTensor.shape; 
       
       bool isTransposed = outputShape[1] > outputShape[2];
@@ -99,7 +93,7 @@ class YoloService {
       }
 
       // 4. Run inference
-      _interpreter!.run(inputBuffer, outputBuffer);
+      interpreter.run(inputBuffer, outputBuffer);
 
       // Helper to dequantize
       double dequantize(dynamic val) {
@@ -171,6 +165,8 @@ class YoloService {
     } catch (e) {
       debugPrint('❌ Error running YOLO inference: $e');
       return [];
+    } finally {
+      interpreter?.close();
     }
   }
 

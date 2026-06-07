@@ -44,9 +44,6 @@ class ParsedReceipt {
 }
 
 class OcrService {
-  static final _textRecognizer = TextRecognizer(
-    script: TextRecognitionScript.latin,
-  );
 
   /// UPDATE: Fungsi sekarang menerima List kotak item dan satu kotak total dari YOLO
   static Future<ParsedReceipt> processImage(
@@ -54,57 +51,71 @@ class OcrService {
     List<Rect> itemBoxes = const [], // Menampung semua kotak berlabel 'item_belanja'
     Rect? totalBox,                  // Menampung kotak berlabel 'total'
   }) async {
-    final inputImage = InputImage.fromFilePath(imageFile.path);
-    final recognizedText = await _textRecognizer.processImage(inputImage);
+    final textRecognizer = TextRecognizer(script: TextRecognitionScript.latin);
+    try {
+      final inputImage = InputImage.fromFilePath(imageFile.path);
+      final recognizedText = await textRecognizer.processImage(inputImage);
+
+    final horizontalLines = _reconstructHorizontalLines(recognizedText);
 
     // Wadah penampung baris teks yang difilter koordinat YOLO
     List<String> itemLines = [];
     List<String> totalLines = [];
     List<String> allLines = []; // Untuk cadangan jika YOLO meleset
 
-    // Iterasi membaca baris demi baris teks dari Google OCR
-    for (TextBlock block in recognizedText.blocks) {
-      for (TextLine line in block.lines) {
-        final Rect kotakTeks = line.boundingBox;
-        allLines.add(line.text);
+    // Iterasi membaca baris demi baris teks yang sudah direkonstruksi secara horizontal
+    for (var hLine in horizontalLines) {
+      final Rect kotakTeks = hLine.boundingBox;
+      allLines.add(hLine.text);
 
-        // 1. Cek apakah baris teks ini berada di dalam salah satu kotak 'item_belanja'
-        bool isInsideItem = false;
-        for (Rect box in itemBoxes) {
-          if (_isBoxInside(kotakTeks, box)) {
-            isInsideItem = true;
-            break;
-          }
+      // 1. Cek apakah baris teks ini berada di dalam salah satu kotak 'item_belanja'
+      bool isInsideItem = false;
+      for (Rect box in itemBoxes) {
+        if (_isBoxInside(kotakTeks, box)) {
+          isInsideItem = true;
+          break;
         }
-        if (isInsideItem) {
-          itemLines.add(line.text);
-        }
+      }
+      if (isInsideItem) {
+        itemLines.add(hLine.text);
+      }
 
-        // 2. Cek apakah baris teks ini berada di dalam kotak 'total'
-        if (totalBox != null && _isBoxInside(kotakTeks, totalBox)) {
-          totalLines.add(line.text);
-        }
+      // 2. Cek apakah baris teks ini berada di dalam kotak 'total'
+      if (totalBox != null && _isBoxInside(kotakTeks, totalBox)) {
+        totalLines.add(hLine.text);
       }
     }
 
     // --- STRATEGI FALLBACK AMAN ---
     // Jika YOLO berhasil memfilter, gunakan teks hasil saringan tersebut.
     // Jika koordinat YOLO kosong/meleset, gunakan seluruh teks asli agar aplikasi tidak blank.
-    String rawTextForItems = itemLines.isNotEmpty ? itemLines.join('\n') : recognizedText.text;
+    String rawTextForItems = itemLines.isNotEmpty ? itemLines.join('\n') : allLines.join('\n');
+    String fullTextStr = allLines.join('\n');
 
     final confidence = _calculateConfidence(recognizedText);
     
     // 3. Ekstrak Daftar Barang: Jalankan parser bawaanmu HANYA pada teks area 'item_belanja'
-    // Ini membuat _parseReceipt milikmu fokus tanpa terganggu teks info_toko atau header lainnya!
-    final parsed = _parseReceipt(rawTextForItems);
+    // Ini membuat ekstraksi barang fokus tanpa terganggu teks info_toko atau header lainnya!
+    final parsedItems = _parseReceipt(rawTextForItems);
 
-    // 4. Ekstrak Nilai Total: Jika kotak total terdeteksi, ambil angka terbesar di dalam kotak tersebut
-    double finalTotal = parsed.total;
-    if (totalLines.isNotEmpty) {
-      finalTotal = _findLargestNumber(totalLines);
-    } else if (finalTotal == 0) {
-      // Jika area total kosong, gunakan pencarian angka terbesar dari seluruh struk sebagai cadangan
-      finalTotal = _findLargestNumber(allLines);
+    // 4. Ekstrak Nilai Total, Cash, dan Change
+    // Masalah sebelumnya: Jika YOLO salah mendeteksi kotak "Tunai" sebagai "Total",
+    // fungsi secara buta mengambil angka terbesar, sehingga Total menjadi nilai Tunai.
+    // Solusi: Kita jalankan parser pada SELURUH teks struk untuk mencari keyword 
+    // "Total", "Tunai", dan "Kembali" secara spesifik agar tidak tertukar.
+    final parsedFull = _parseReceipt(fullTextStr);
+
+    double finalTotal = parsedFull.total;
+    if (finalTotal == 0) {
+      // Jika di seluruh teks tidak ada keyword total, coba cari dari hasil item
+      if (parsedItems.total > 0) {
+        finalTotal = parsedItems.total;
+      } else if (totalLines.isNotEmpty) {
+        // Fallback terakhir: jika parser gagal tapi YOLO mendeteksi kotak total
+        finalTotal = _findLargestNumber(totalLines);
+      } else {
+        finalTotal = _findLargestNumber(allLines);
+      }
     }
 
     // Teks yang akan ditampilkan di Tab "Teks OCR"
@@ -114,33 +125,118 @@ class OcrService {
         displayedRawText += "--- AREA ITEM BELANJA (YOLO) ---\n" + itemLines.join('\n') + "\n\n";
       }
       if (totalLines.isNotEmpty) {
-        displayedRawText += "--- AREA TOTAL (YOLO) ---\n" + totalLines.join('\n');
+        displayedRawText += "--- AREA BAWAH (YOLO) ---\n" + totalLines.join('\n');
       }
     } else {
       // Jika YOLO meleset/tidak mendeteksi, tampilkan semua teks sebagai fallback
-      displayedRawText = "--- SELURUH TEKS (YOLO Tidak Mendeteksi Area) ---\n" + recognizedText.text;
+      displayedRawText = "--- SELURUH TEKS (YOLO Tidak Mendeteksi Area) ---\n" + fullTextStr;
     }
 
     return ParsedReceipt(
-      items: parsed.items,
-      subtotal: parsed.subtotal,
+      items: parsedItems.items,
+      subtotal: parsedItems.subtotal > 0 ? parsedItems.subtotal : parsedFull.subtotal,
       total: finalTotal,
-      cash: parsed.cash,
-      change: parsed.change,
+      cash: parsedFull.cash,
+      change: parsedFull.change,
       rawText: displayedRawText.trim(),
       confidence: confidence,
       currency: 'Rp',
     );
+    } finally {
+      textRecognizer.close();
+    }
+  }
+
+  /// Helper untuk menyusun teks OCR yang terbaca kolom (atas-bawah) menjadi baris tabel (kiri-kanan)
+  static List<_HorizontalLine> _reconstructHorizontalLines(RecognizedText recognizedText) {
+    List<TextLine> allLinesRaw = [];
+    for (TextBlock block in recognizedText.blocks) {
+      allLinesRaw.addAll(block.lines);
+    }
+
+    // Urutkan kasar berdasarkan posisi Y
+    allLinesRaw.sort((a, b) {
+      double ay = a.boundingBox.top + a.boundingBox.height / 2;
+      double by = b.boundingBox.top + b.boundingBox.height / 2;
+      return ay.compareTo(by);
+    });
+
+    List<List<TextLine>> rows = [];
+    for (var line in allLinesRaw) {
+      bool added = false;
+      double lCenterY = line.boundingBox.top + line.boundingBox.height / 2;
+
+      // Kelompokkan dalam satu baris jika posisi Y-nya berdekatan (toleransi 40% dari tinggi huruf)
+      for (var row in rows) {
+        double rowCenterY = row.map((e) => e.boundingBox.top + e.boundingBox.height / 2).reduce((a, b) => a + b) / row.length;
+        if ((lCenterY - rowCenterY).abs() < line.boundingBox.height * 0.4) {
+          row.add(line);
+          added = true;
+          break;
+        }
+      }
+      if (!added) {
+        rows.add([line]);
+      }
+    }
+
+    List<_HorizontalLine> result = [];
+    for (var row in rows) {
+      // Urutkan per baris berdasarkan posisi X (kiri ke kanan)
+      row.sort((a, b) => a.boundingBox.left.compareTo(b.boundingBox.left));
+      String rowStr = '';
+      double minLeft = double.infinity;
+      double minTop = double.infinity;
+      double maxRight = double.negativeInfinity;
+      double maxBottom = double.negativeInfinity;
+
+      for (int i = 0; i < row.length; i++) {
+        final box = row[i].boundingBox;
+        if (box.left < minLeft) minLeft = box.left;
+        if (box.top < minTop) minTop = box.top;
+        if (box.right > maxRight) maxRight = box.right;
+        if (box.bottom > maxBottom) maxBottom = box.bottom;
+
+        if (i > 0) {
+          double gap = box.left - row[i - 1].boundingBox.right;
+          // Berikan jarak tabel (tab) jika jarak antar kata cukup jauh (kolom)
+          if (gap > box.height * 0.8) {
+            rowStr += '    '; 
+          } else {
+            rowStr += ' ';
+          }
+        }
+        rowStr += row[i].text;
+      }
+      result.add(_HorizontalLine(rowStr.trim(), Rect.fromLTRB(minLeft, minTop, maxRight, maxBottom)));
+    }
+    
+    // Urutkan final berdasarkan Y
+    result.sort((a, b) => a.boundingBox.top.compareTo(b.boundingBox.top));
+    return result;
   }
 
   /// HELPER BARU: Logika matematika untuk mengecek irisan posisi kotak teks di dalam kotak YOLO
   static bool _isBoxInside(Rect inner, Rect outer) {
-    // Berikan sedikit toleransi sebesar 10 piksel jika koordinat pemotongan YOLO terlalu mepet
-    const double padding = 10;
-    return inner.left >= (outer.left - padding) &&
-           inner.right <= (outer.right + padding) &&
-           inner.top >= (outer.top - padding) &&
-           inner.bottom <= (outer.bottom + padding);
+    // Karena teks sekarang direkonstruksi menjadi baris horizontal yang sangat lebar 
+    // (dari nama item di ujung kiri sampai harga di ujung kanan), 
+    // kotak teks (inner) seringkali lebih lebar dari kotak deteksi YOLO (outer).
+    // Oleh karena itu, kita tidak bisa memakai logika "Strictly Inside" lagi.
+    // Kita ubah menjadi logika "Tumpang Tindih" (Intersection).
+
+    const double paddingY = 15.0; // Toleransi batas atas-bawah
+    const double paddingX = 30.0; // Toleransi kiri-kanan yang lebih longgar
+
+    // 1. Cek Vertikal: Pusat Y baris teks harus berada di dalam batas Y kotak YOLO
+    double innerCenterY = inner.top + inner.height / 2;
+    bool verticalMatch = innerCenterY >= (outer.top - paddingY) && 
+                         innerCenterY <= (outer.bottom + paddingY);
+
+    // 2. Cek Horizontal: Baris teks harus tumpang tindih dengan kotak YOLO di sumbu X
+    bool horizontalMatch = (inner.right + paddingX) >= outer.left && 
+                           (inner.left - paddingX) <= outer.right;
+
+    return verticalMatch && horizontalMatch;
   }
   // ═══════════════════════════════════════════════════════════════════════════
   //  RECEIPT PARSER — handles messy real-world OCR output
@@ -591,15 +687,17 @@ class OcrService {
     }
     return (totalElements / 30.0).clamp(0.3, 0.95);
   }
-
-  static void dispose() {
-    _textRecognizer.close();
-  }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  Internal Classification Types
 // ═══════════════════════════════════════════════════════════════════════════
+
+class _HorizontalLine {
+  final String text;
+  final Rect boundingBox;
+  _HorizontalLine(this.text, this.boundingBox);
+}
 
 enum _LineType {
   itemName,
