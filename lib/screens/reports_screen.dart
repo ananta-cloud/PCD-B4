@@ -4,11 +4,10 @@ import 'package:intl/intl.dart'; // Tambahkan import ini
 import '../core/app_colors.dart';
 import '../core/app_text_styles.dart';
 import '../repositories/receipt_repository.dart';
-import '../repositories/user_repository.dart';
-import '../services/mongo_service.dart';
 import '../controllers/auth_controller.dart';
 import 'login_screen.dart';
 import 'account_settings_screen.dart';
+import '../services/pdf_service.dart';
 
 // Ubah dari StatelessWidget → StatefulWidget
 class ReportsScreen extends StatefulWidget {
@@ -21,6 +20,7 @@ class ReportsScreen extends StatefulWidget {
 class _ReportsScreenState extends State<ReportsScreen> {
   // ── TAMBAHAN: State bulan yang dipilih ──────────────────────────────
   DateTime _selectedMonth = DateTime(DateTime.now().year, DateTime.now().month);
+  bool _isExporting = false;
 
   void _changeMonth(int monthsToAdd) {
     final next = DateTime(
@@ -120,6 +120,55 @@ class _ReportsScreenState extends State<ReportsScreen> {
           ),
 
           // ─────────────────────────────────────────────────────────────
+          const SizedBox(height: 8),
+
+          // ── TAMBAHAN: Tombol Export PDF ────────────────────────────────
+          Align(
+            alignment: Alignment.centerRight,
+            child: TextButton.icon(
+              onPressed: _isExporting || allReceipts.isEmpty
+                  ? null
+                  : () async {
+                      setState(() {
+                        _isExporting = true;
+                      });
+                      try {
+                        await PdfService.exportMonthlyRecap(
+                          _selectedMonth,
+                          allReceipts,
+                        );
+                      } catch (e) {
+                        if (mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text('Gagal export PDF: $e')),
+                          );
+                        }
+                      } finally {
+                        if (mounted) {
+                          setState(() {
+                            _isExporting = false;
+                          });
+                        }
+                      }
+                    },
+              icon: _isExporting
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.picture_as_pdf_outlined, size: 20),
+              label: Text(_isExporting ? 'Exporting...' : 'Export PDF'),
+              style: TextButton.styleFrom(
+                foregroundColor: AppColors.primary,
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(99),
+                  side: BorderSide(color: AppColors.primary.withValues(alpha: 0.5)),
+                ),
+              ),
+            ),
+          ),
           const SizedBox(height: 12),
 
           _StatCard(
