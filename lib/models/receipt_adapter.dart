@@ -26,13 +26,13 @@ class ReceiptAdapter extends TypeAdapter<Receipt> {
       confidenceScore: fields[3] as double,
       scannedAt: DateTime.fromMillisecondsSinceEpoch(fields[4] as int),
       isSynced: fields[5] as bool,
-      imagePath: fields[7] as String?,
+      imagePath: (fields[6] ?? fields[7]) as String?,
     );
   }
 
   @override
   void write(BinaryWriter writer, Receipt obj) {
-    writer.writeByte(8); // jumlah field
+    writer.writeByte(7); // jumlah field (0–6)
     // Field 0: id
     writer.writeByte(0);
     writer.write(obj.id);
@@ -51,9 +51,8 @@ class ReceiptAdapter extends TypeAdapter<Receipt> {
     // Field 5: isSynced
     writer.writeByte(5);
     writer.write(obj.isSynced);
-    // Field 6: merchantName
+    // Field 6: imagePath
     writer.writeByte(6);
-    writer.writeByte(7);
     writer.write(obj.imagePath);
   }
 }

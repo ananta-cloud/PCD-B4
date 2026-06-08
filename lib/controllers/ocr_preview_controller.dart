@@ -12,9 +12,22 @@ class OcrPreviewController extends ChangeNotifier {
   String? _errorMessage;
   String? get errorMessage => _errorMessage;
 
+  bool _isDisposed = false;
+
+  @override
+  void dispose() {
+    _isDisposed = true;
+    super.dispose();
+  }
+
+  /// Safe notifyListeners — tidak crash jika sudah disposed
+  void _safeNotify() {
+    if (!_isDisposed) notifyListeners();
+  }
+
   void clearError() {
     _errorMessage = null;
-    notifyListeners();
+    _safeNotify();
   }
 
   Future<Receipt?> saveReceipt(File croppedFile, ParsedReceipt parsedReceipt) async {
@@ -22,7 +35,7 @@ class OcrPreviewController extends ChangeNotifier {
 
     _isSaving = true;
     _errorMessage = null;
-    notifyListeners();
+    _safeNotify();
 
     try {
       final receiptId = 'receipt_${DateTime.now().millisecondsSinceEpoch}';
@@ -55,12 +68,12 @@ class OcrPreviewController extends ChangeNotifier {
       }
 
       _isSaving = false;
-      notifyListeners();
+      _safeNotify();
       return receipt;
     } catch (e) {
       _errorMessage = 'Gagal menyimpan: $e';
       _isSaving = false;
-      notifyListeners();
+      _safeNotify();
       return null;
     }
   }

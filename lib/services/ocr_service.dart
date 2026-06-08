@@ -355,6 +355,26 @@ class OcrService {
       );
     }
 
+    // Check for "qty price" pattern WITHOUT 'x' (e.g., "1 8000", "2 15000")
+    // Common on Indonesian receipts where OCR splits name and price into separate lines
+    final qtyPriceNoX = RegExp(
+      r'^(\d{1,2})\s+([\d.,]{3,})\s*$',
+    ).firstMatch(line.trim());
+    if (qtyPriceNoX != null) {
+      final qty = int.tryParse(qtyPriceNoX.group(1)!) ?? 1;
+      final unitPrice = _parseNumber(qtyPriceNoX.group(2)!);
+      if (unitPrice >= 100) {
+        // Harga minimal 100 agar tidak salah deteksi nomor lain
+        return _ClassifiedLine(
+          line,
+          _LineType.qtyPrice,
+          qty: qty,
+          unitPrice: unitPrice,
+          price: unitPrice * qty,
+        );
+      }
+    }
+
     // Check for full item line: "name  qty x price  total" or "name  qty x price"
     final fullItemMatch = RegExp(
       r'(.+?)\s+(\d+)\s*[xX×]\s*([\d.,]+)(?:\s+([\d.,]+))?\s*$',

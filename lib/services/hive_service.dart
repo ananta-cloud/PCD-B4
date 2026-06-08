@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:hive_flutter/hive_flutter.dart';
 import '../models/receipt.dart';
 import '../models/receipt_adapter.dart';
@@ -44,17 +45,23 @@ class HiveService {
     // 1. Initialize Hive Flutter
     await Hive.initFlutter();
 
+    // Simpan path untuk recovery jika box korup
+    _hivePath = (await Hive.openBox('_temp_path_check')).path;
+    if (_hivePath != null) {
+      _hivePath = _hivePath!.substring(0, _hivePath!.lastIndexOf(Platform.pathSeparator));
+    }
+    await Hive.deleteBoxFromDisk('_temp_path_check');
+
     // 2. Register semua TypeAdapter
     Hive.registerAdapter(ReceiptAdapter());
     Hive.registerAdapter(UserAdapter());
     Hive.registerAdapter(AppSettingsAdapter());
 
-    // 3. Buka boxes TANPA try-catch agar error terlihat
-    // Jika ada box yang gagal, aplikasi akan langsung ke catch di main.dart
-    await Hive.openBox<Receipt>(receiptsBoxName);
-    await Hive.openBox<User>(usersBoxName);
-    await Hive.openBox<AppSettings>(settingsBoxName);
-    await Hive.openBox('session'); // Tambahkan juga box session
+    // 3. Buka boxes dengan error handling (jika korup, delete dan buat ulang)
+    await _safeOpenBoxAndRecover<Receipt>(receiptsBoxName);
+    await _safeOpenBoxAndRecover<User>(usersBoxName);
+    await _safeOpenBoxAndRecover<AppSettings>(settingsBoxName);
+    await _safeOpenBoxAndRecover<dynamic>('session');
 
     // 4. Initialize default settings
     final settingsBox = Hive.box<AppSettings>(settingsBoxName);
@@ -66,13 +73,36 @@ class HiveService {
     print('✅ Hive Service initialized successfully');
   }
 
-  /// Helper method to safely open a box, handling corrupted data
-  static Future<void> _safeOpenBox<T>(String boxName) async {
+  // Path Hive disimpan saat init untuk digunakan recovery
+  static String? _hivePath;
+
+  /// Helper method to safely open a box, handling corrupted data by deleting and recreating it
+  static Future<void> _safeOpenBoxAndRecover<T>(String boxName) async {
     try {
       await Hive.openBox<T>(boxName);
-      print('✓ Box $boxName dibuka');
+      print('\u2713 Box $boxName dibuka');
     } catch (e) {
-      print('⚠️ Box $boxName gagal: $e');
+      print('\u26a0\ufe0f Box $boxName korup: $e');
+      print('\ud83d\udd04 Menghapus file korup secara manual...');
+      try {
+        // Hapus semua file terkait box ini secara manual
+        if (_hivePath != null) {
+          final extensions = ['.hive', '.lock'];
+          for (final ext in extensions) {
+            final file = File('$_hivePath${Platform.pathSeparator}$boxName$ext');
+            if (await file.exists()) {
+              await file.delete();
+              print('  \ud83d\uddd1\ufe0f Dihapus: ${file.path}');
+            }
+          }
+        }
+        // Buka ulang box baru yang bersih
+        await Hive.openBox<T>(boxName);
+        print('\u2713 Box $boxName berhasil dipulihkan (data lama dihapus)');
+      } catch (e2) {
+        print('\u274c Gagal memulihkan box $boxName: $e2');
+        rethrow;
+      }
     }
   }
 

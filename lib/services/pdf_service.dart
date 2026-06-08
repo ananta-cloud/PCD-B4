@@ -7,7 +7,16 @@ import '../models/receipt.dart';
 class PdfService {
   /// Mengekspor daftar struk menjadi file PDF dan langsung membuka menu share OS
   static Future<void> exportMonthlyRecap(DateTime month, List<Receipt> receipts) async {
-    final pdf = pw.Document();
+    // Load Google Font agar support Unicode (huruf Indonesia, simbol, dll)
+    final fontRegular = await PdfGoogleFonts.robotoRegular();
+    final fontBold = await PdfGoogleFonts.robotoBold();
+
+    final pdf = pw.Document(
+      theme: pw.ThemeData.withFont(
+        base: fontRegular,
+        bold: fontBold,
+      ),
+    );
 
     // Helper formatter
     String formatCurrency(double amount) {
