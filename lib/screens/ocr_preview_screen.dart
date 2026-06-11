@@ -2,7 +2,6 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../core/app_colors.dart';
-import '../models/receipt.dart';
 import '../controllers/ocr_preview_controller.dart';
 import 'detail_screen.dart';
 import '../services/ocr_service.dart';
@@ -146,7 +145,7 @@ class _OcrPreviewScreenState extends State<OcrPreviewScreen>
               controller: _tabCtrl,
               children: [
                 _buildInfoTab(parsed),
-                _buildRawTextTab(parsed.rawText),
+                _buildRawTextTab(parsed),
               ],
             ),
           ),
@@ -354,22 +353,23 @@ class _OcrPreviewScreenState extends State<OcrPreviewScreen>
     );
   }
 
-  // ── Tab 2: Teks OCR Mentah ───────────────────────────────────────────────
+  // ── Tab 2: Item Barang (formatted) ─────────────────────────────────────
 
-  Widget _buildRawTextTab(String rawText) {
-    if (rawText.isEmpty) {
+  Widget _buildRawTextTab(ParsedReceipt parsed) {
+    final display = parsed.formattedItems;
+    if (display.isEmpty) {
       return Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             const Icon(
-              Icons.text_fields_outlined,
+              Icons.receipt_long_outlined,
               color: Colors.white24,
               size: 64,
             ),
             const SizedBox(height: 16),
             Text(
-              'Tidak ada teks terdeteksi',
+              'Tidak ada item barang terdeteksi',
               style: GoogleFonts.inter(color: Colors.white38, fontSize: 15),
             ),
           ],
@@ -385,13 +385,13 @@ class _OcrPreviewScreenState extends State<OcrPreviewScreen>
           Row(
             children: [
               const Icon(
-                Icons.article_outlined,
+                Icons.list_alt_rounded,
                 color: Colors.white38,
                 size: 16,
               ),
               const SizedBox(width: 8),
               Text(
-                'Teks mentah hasil scan (${rawText.split('\n').length} baris)',
+                'Item terdeteksi (${parsed.items.length} barang)',
                 style: GoogleFonts.inter(fontSize: 12, color: Colors.white38),
               ),
             ],
@@ -406,12 +406,45 @@ class _OcrPreviewScreenState extends State<OcrPreviewScreen>
               border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
             ),
             child: SelectableText(
-              rawText,
+              display,
               style: GoogleFonts.spaceMono(
-                fontSize: 12.5,
+                fontSize: 13,
                 color: Colors.white70,
-                height: 1.7,
+                height: 1.8,
               ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          // Total di bawah
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            decoration: BoxDecoration(
+              color: AppColors.primary.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: AppColors.primary.withValues(alpha: 0.3)),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  'TOTAL',
+                  style: GoogleFonts.spaceGrotesk(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.primary,
+                    letterSpacing: 1,
+                  ),
+                ),
+                Text(
+                  parsed.isValid ? _formatRp(parsed.total) : '-',
+                  style: GoogleFonts.spaceGrotesk(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w800,
+                    color: AppColors.primary,
+                  ),
+                ),
+              ],
             ),
           ),
         ],

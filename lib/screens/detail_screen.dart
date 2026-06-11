@@ -153,22 +153,11 @@ class _DetailScreenState extends State<DetailScreen>
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.center,
               children: [
-                const Icon(
-                  Icons.storefront,
-                  size: 64,
-                  color: AppColors.primary,
-                ),
                 const SizedBox(height: 16),
                 Text(
-                  r.merchantName ?? 'Unknown Merchant',
-                  style: AppTextStyles.headlineMd(),
-                  textAlign: TextAlign.center,
-                ),
-                const SizedBox(height: 8),
-                Text(
                   r.formattedDate,
-                  style: AppTextStyles.bodyMd(
-                    color: AppColors.onSurfaceVariant,
+                  style: AppTextStyles.headlineMd(
+                    color: AppColors.onSurface,
                   ),
                 ),
                 const SizedBox(height: 4),
@@ -181,23 +170,8 @@ class _DetailScreenState extends State<DetailScreen>
                 const SizedBox(height: 24),
                 const Divider(thickness: 2),
                 const SizedBox(height: 16),
-                // Receipt details
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text('Receipt ID', style: AppTextStyles.bodyMd()),
-                    Expanded(
-                      child: Text(
-                        r.id,
-                        textAlign: TextAlign.right,
-                        style: AppTextStyles.bodyMd(
-                          color: AppColors.onSurfaceVariant,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 12),
+                
+                // Receipt details (ID dihapus)
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
@@ -243,6 +217,7 @@ class _DetailScreenState extends State<DetailScreen>
                 const SizedBox(height: 16),
                 const Divider(thickness: 2),
                 const SizedBox(height: 16),
+                
                 // Total
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -255,6 +230,7 @@ class _DetailScreenState extends State<DetailScreen>
                   ],
                 ),
                 const SizedBox(height: 32),
+                
                 // Action buttons
                 SizedBox(
                   width: double.infinity,

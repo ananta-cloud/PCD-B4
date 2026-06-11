@@ -26,7 +26,6 @@ void main() {
         confidenceScore: 0.95,
         scannedAt: DateTime.now(),
         isSynced: false,
-        merchantName: 'Test Store',
       );
 
       await ReceiptRepository.addReceipt(receipt);
@@ -34,8 +33,7 @@ void main() {
       // READ: Ambil receipt yang baru disimpan
       final retrieved = ReceiptRepository.getById('test_receipt_1');
       expect(retrieved, isNotNull);
-      expect(retrieved!.merchantName, equals('Test Store'));
-      expect(retrieved.totalAmount, equals(150000));
+      expect(retrieved!.totalAmount, equals(150000));
 
       // UPDATE: Ubah status synced
       final updated = receipt.copyWith(isSynced: true);
@@ -60,7 +58,6 @@ void main() {
           confidenceScore: 0.9,
           scannedAt: now,
           isSynced: true,
-          merchantName: 'Store A',
         ),
         Receipt(
           id: 'r2',
@@ -69,7 +66,6 @@ void main() {
           confidenceScore: 0.85,
           scannedAt: now.subtract(const Duration(days: 1)),
           isSynced: false,
-          merchantName: 'Store B',
         ),
         Receipt(
           id: 'r3',
@@ -78,7 +74,6 @@ void main() {
           confidenceScore: 0.92,
           scannedAt: now.subtract(const Duration(days: 7)),
           isSynced: true,
-          merchantName: 'Store C',
         ),
       ];
 
@@ -160,7 +155,6 @@ void main() {
         confidenceScore: 0.88,
         scannedAt: DateTime.now(),
         isSynced: false,
-        merchantName: 'Sync Test Store',
       );
 
       await ReceiptRepository.addReceipt(receipt);
@@ -189,7 +183,6 @@ void main() {
           totalAmount: 100000,
           confidenceScore: 0.9,
           scannedAt: today,
-          merchantName: 'Today Store',
         ),
         Receipt(
           id: 'date_test_2',
@@ -197,7 +190,6 @@ void main() {
           totalAmount: 150000,
           confidenceScore: 0.85,
           scannedAt: today.subtract(const Duration(days: 3)),
-          merchantName: 'Three Days Ago',
         ),
         Receipt(
           id: 'date_test_3',
@@ -205,7 +197,6 @@ void main() {
           totalAmount: 120000,
           confidenceScore: 0.92,
           scannedAt: today.subtract(const Duration(days: 8)),
-          merchantName: 'Last Week',
         ),
       ];
 
@@ -231,7 +222,6 @@ void main() {
           totalAmount: 100000 + (i * 10000),
           confidenceScore: 0.85 + (i * 0.01),
           scannedAt: now.subtract(Duration(hours: i)),
-          merchantName: 'Store $i',
         );
         await ReceiptRepository.addReceipt(receipt);
       }

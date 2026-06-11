@@ -1,5 +1,8 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'dart:ui';
+import 'package:camera/camera.dart';
+import 'package:flutter/foundation.dart';
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 
 /// A single line item on a receipt
@@ -25,6 +28,7 @@ class ParsedReceipt {
   final double? cash;
   final double? change;
   final String rawText;
+  final String formattedItems; // display: "NAMA BARANG   3.500" per baris
   final double confidence;
   final String currency;
 
@@ -37,12 +41,14 @@ class ParsedReceipt {
     required this.rawText,
     required this.confidence,
     required this.currency,
-  });
+    String? formattedItems,
+  }) : formattedItems = formattedItems ?? _buildFormatted(items);
 
   bool get hasCashPayment => cash != null && cash! > 0;
   bool get isValid => total > 0;
 }
 
+/// OCR Service — uses Google ML Kit for offline text recognition.
 class OcrService {
 
   /// UPDATE: Fungsi sekarang menerima List kotak item dan satu kotak total dari YOLO
@@ -91,6 +97,15 @@ class OcrService {
     // Jika koordinat YOLO kosong/meleset, gunakan seluruh teks asli agar aplikasi tidak blank.
     String rawTextForItems = itemLines.isNotEmpty ? itemLines.join('\n') : allLines.join('\n');
     String fullTextStr = allLines.join('\n');
+
+    final rawText = recognizedText.text;
+
+    // DEBUG: lihat teks mentah yang dibaca ML Kit
+    debugPrint('═══ OCR RAW TEXT ═══');
+    for (final line in rawText.split('\n')) {
+      debugPrint('  | $line');
+    }
+    debugPrint('════════════════════');
 
     final confidence = _calculateConfidence(recognizedText);
     
@@ -142,6 +157,62 @@ class OcrService {
       confidence: confidence,
       currency: 'Rp',
     );
+  }
+
+  /// Analyze a camera frame for text presence (used for auto-scan).
+  /// Returns the number of text blocks detected.
+  static Future<int> analyzeFrameForText(
+    CameraImage image,
+    int sensorOrientation,
+  ) async {
+    final inputImage = _inputImageFromCamera(image, sensorOrientation);
+    if (inputImage == null) return 0;
+
+    final recognized = await _textRecognizer.processImage(inputImage);
+    return recognized.blocks.length;
+  }
+
+  /// Convert CameraImage (YUV420/NV21) to InputImage for ML Kit.
+  static InputImage? _inputImageFromCamera(
+    CameraImage image,
+    int sensorOrientation,
+  ) {
+    final format = InputImageFormatValue.fromRawValue(image.format.raw);
+    if (format == null) return null;
+
+    // Concatenate all YUV planes
+    final allBytes = WriteBuffer();
+    for (final plane in image.planes) {
+      allBytes.putUint8List(plane.bytes);
+    }
+    final bytes = allBytes.done().buffer.asUint8List();
+
+    final rotation = _rotationFromDegrees(sensorOrientation);
+
+    return InputImage.fromBytes(
+      bytes: bytes,
+      metadata: InputImageMetadata(
+        size: Size(image.width.toDouble(), image.height.toDouble()),
+        rotation: rotation,
+        format: format,
+        bytesPerRow: image.planes[0].bytesPerRow,
+      ),
+    );
+  }
+
+  static InputImageRotation _rotationFromDegrees(int degrees) {
+    switch (degrees) {
+      case 0:
+        return InputImageRotation.rotation0deg;
+      case 90:
+        return InputImageRotation.rotation90deg;
+      case 180:
+        return InputImageRotation.rotation180deg;
+      case 270:
+        return InputImageRotation.rotation270deg;
+      default:
+        return InputImageRotation.rotation0deg;
+    }
     } finally {
       textRecognizer.close();
     }
@@ -449,13 +520,16 @@ class OcrService {
     }
 
     // Check for line with just "name  price" pattern
+    // ✅ Support: 1+ spasi (bukan hanya 2+), untuk struk biasa
     final namePriceMatch = RegExp(
-      r'^(.+?)\s{2,}([\d.,]+)\s*$',
+      r'^(.+?)\s+(\d[\d.,]*)\s*$',
     ).firstMatch(line);
     if (namePriceMatch != null) {
       final name = namePriceMatch.group(1)!.trim();
-      final price = _parseNumber(namePriceMatch.group(2)!);
-      if (!RegExp(r'^\d').hasMatch(name) && price > 0) {
+      final priceStr = namePriceMatch.group(2)!;
+      final price = _parseNumber(priceStr);
+      // Pastikan nama bukan angka semua, harga > 0, dan panjang nama minimal 2 karakter
+      if (!RegExp(r'^[\d.,]+$').hasMatch(name) && price > 0 && name.length >= 2) {
         return _ClassifiedLine(
           line,
           _LineType.fullItem,
@@ -661,31 +735,59 @@ class OcrService {
     return largest;
   }
 
-  // ── Confidence ──────────────────────────────────────────────────────────
-
+  /// Hitung confidence berdasarkan kualitas OCR output.
+  /// ML Kit Latin script di Android hampir tidak pernah mengembalikan
+  /// nilai confidence dari element, jadi kita pakai heuristic multi-faktor.
   static double _calculateConfidence(RecognizedText text) {
     if (text.blocks.isEmpty) return 0.0;
-    double totalConfidence = 0;
-    int count = 0;
+
+    // ── Coba ambil dari ML Kit langsung ──────────────────────────────────
+    double totalConf = 0;
+    int confCount = 0;
     for (final block in text.blocks) {
       for (final line in block.lines) {
-        for (final element in line.elements) {
-          final conf = element.confidence;
-          if (conf != null) {
-            totalConfidence += conf;
-            count++;
+        for (final el in line.elements) {
+          if (el.confidence != null) {
+            totalConf += el.confidence!;
+            confCount++;
           }
         }
       }
     }
-    if (count > 0) return (totalConfidence / count).clamp(0.0, 1.0);
-    int totalElements = 0;
+    if (confCount > 0) return (totalConf / confCount).clamp(0.0, 1.0);
+
+    // ── Fallback: heuristic multi-faktor ─────────────────────────────────
+    // Faktor 1: Jumlah block (struk biasanya 3-10 block)
+    final blockScore = (text.blocks.length / 8.0).clamp(0.0, 1.0);
+
+    // Faktor 2: Rata-rata panjang teks per line (lebih panjang = lebih banyak info)
+    int totalLines = 0;
+    int totalChars = 0;
     for (final block in text.blocks) {
       for (final line in block.lines) {
-        totalElements += line.elements.length;
+        totalLines++;
+        totalChars += line.text.length;
       }
     }
-    return (totalElements / 30.0).clamp(0.3, 0.95);
+    final avgLineLen = totalLines > 0 ? totalChars / totalLines : 0;
+    final lengthScore = (avgLineLen / 20.0).clamp(0.0, 1.0);
+
+    // Faktor 3: Rasio karakter "bersih" (huruf/angka) vs total
+    final allText = text.text;
+    final cleanChars = RegExp(r'[a-zA-Z0-9.,\s]').allMatches(allText).length;
+    final cleanRatio = allText.isNotEmpty ? cleanChars / allText.length : 0.0;
+
+    // Faktor 4: Ada angka (harga) → kemungkinan struk valid
+    final hasNumbers = RegExp(r'\d{3,}').hasMatch(allText);
+    final numberBonus = hasNumbers ? 0.1 : 0.0;
+
+    // Gabung dengan bobot
+    final score = (blockScore * 0.25) +
+        (lengthScore * 0.30) +
+        (cleanRatio * 0.35) +
+        numberBonus;
+
+    return score.clamp(0.0, 1.0);
   }
 }
 

@@ -6,7 +6,6 @@ class Receipt {
   final double confidenceScore;
   final DateTime scannedAt;
   bool isSynced;
-  final String? merchantName;
   final String? imagePath;
 
   Receipt({
@@ -16,7 +15,6 @@ class Receipt {
     required this.confidenceScore,
     required this.scannedAt,
     this.isSynced = false,
-    this.merchantName,
     this.imagePath,
   });
 
@@ -63,7 +61,6 @@ class Receipt {
       confidenceScore: confidenceScore ?? this.confidenceScore,
       scannedAt: scannedAt ?? this.scannedAt,
       isSynced: isSynced ?? this.isSynced,
-      merchantName: merchantName ?? this.merchantName,
       imagePath: imagePath ?? this.imagePath,
     );
   }

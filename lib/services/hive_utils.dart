@@ -30,7 +30,6 @@ class HiveUtils {
       confidenceScore: confidenceScore,
       scannedAt: scannedAt,
       isSynced: false,
-      merchantName: merchantName,
       imagePath: imagePath,
     );
     await ReceiptRepository.addReceipt(receipt);
@@ -181,7 +180,6 @@ class HiveUtils {
     for (final receipt in pending) {
       try {
         final success = await MongoService.insertReceipt(
-          receipt.merchantName ?? 'Unknown',
           receipt.totalAmount,
         );
         if (success) {
@@ -247,29 +245,12 @@ class HiveUtils {
     };
   }
 
-  /// Get spending breakdown per merchant (top N)
-  static Map<String, double> getTopMerchants({int limit = 5}) {
-    final receipts = ReceiptRepository.getAll();
-    final byMerchant = <String, double>{};
-
-    for (final receipt in receipts) {
-      final merchant = receipt.merchantName ?? 'Other';
-      byMerchant[merchant] = (byMerchant[merchant] ?? 0) + receipt.totalAmount;
-    }
-
-    // Sort by amount descending
-    final sorted = byMerchant.entries.toList()
-      ..sort((a, b) => b.value.compareTo(a.value));
-
-    // Return top N
-    return Map.fromEntries(sorted.take(limit));
-  }
 
   // ── Formatting Utils ────────────────────────────────────────────────────
 
   /// Format receipt untuk display
   static String formatReceiptDisplay(Receipt receipt) {
-    return '${receipt.merchantName ?? 'Unknown'}\n'
+    return
         '${receipt.formattedAmount} • ${receipt.formattedDate}\n'
         'Confidence: ${receipt.confidencePercent}';
   }
@@ -358,9 +339,6 @@ class HiveUtils {
 
     print('\n[RECEIPTS]');
     final receipts = ReceiptRepository.getAll();
-    for (final r in receipts.take(5)) {
-      print('- ${r.id}: ${r.merchantName} (${r.formattedAmount})');
-    }
     if (receipts.length > 5) print('... and ${receipts.length - 5} more');
 
     print('\n[USERS]');

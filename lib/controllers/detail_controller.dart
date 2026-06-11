@@ -19,7 +19,6 @@ class DetailController {
   }
 
   /// Get formatted display data
-  String get displayMerchant => receipt.merchantName ?? 'Unknown Merchant';
   String get displayAmount => receipt.formattedAmount;
   String get displayDate => receipt.formattedDate;
   String get displayTime => receipt.formattedTime;

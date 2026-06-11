@@ -1,20 +1,60 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:intl/intl.dart'; // Tambahkan import ini
 import '../core/app_colors.dart';
 import '../core/app_text_styles.dart';
 import '../repositories/receipt_repository.dart';
-import '../repositories/user_repository.dart';
-import '../services/mongo_service.dart';
 import '../controllers/auth_controller.dart';
 import 'login_screen.dart';
+import 'account_settings_screen.dart';
+import '../services/pdf_service.dart';
 
-class ReportsScreen extends StatelessWidget {
+// Ubah dari StatelessWidget → StatefulWidget
+class ReportsScreen extends StatefulWidget {
   const ReportsScreen({super.key});
 
   @override
+  State<ReportsScreen> createState() => _ReportsScreenState();
+}
+
+class _ReportsScreenState extends State<ReportsScreen> {
+  // ── TAMBAHAN: State bulan yang dipilih ──────────────────────────────
+  DateTime _selectedMonth = DateTime(DateTime.now().year, DateTime.now().month);
+  bool _isExporting = false;
+
+  void _changeMonth(int monthsToAdd) {
+    final next = DateTime(
+      _selectedMonth.year,
+      _selectedMonth.month + monthsToAdd,
+    );
+    final now = DateTime(DateTime.now().year, DateTime.now().month);
+    if (next.isAfter(now)) return; // Batasi maks bulan sekarang
+    setState(() {
+      _selectedMonth = next;
+    });
+  }
+  // ────────────────────────────────────────────────────────────────────
+
+  String _formatAmount(double amount) {
+    final f = amount
+        .toStringAsFixed(0)
+        .replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (m) => '.');
+    return 'Rp $f';
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final total = ReceiptRepository.totalSpending;
-    final scanned = ReceiptRepository.totalScanned;
+    // ── TAMBAHAN: Filter data berdasarkan bulan yang dipilih ────────────
+    final allReceipts = ReceiptRepository.getAll().where((r) {
+      return r.scannedAt.year == _selectedMonth.year &&
+          r.scannedAt.month == _selectedMonth.month;
+    }).toList();
+
+    final total = allReceipts.fold(0.0, (sum, r) => sum + r.totalAmount);
+    final scanned = allReceipts.length;
+    // ────────────────────────────────────────────────────────────────────
+
+    // Data ini tidak bergantung bulan, tetap dari repository global
     final syncProgress = ReceiptRepository.syncProgress;
     final pending = ReceiptRepository.pendingCount;
 
@@ -33,11 +73,8 @@ class ReportsScreen extends StatelessWidget {
           IconButton(
             icon: const Icon(Icons.logout, color: Colors.redAccent),
             onPressed: () async {
-              // Gunakan AuthController untuk membersihkan semua state & session
               final authCtrl = AuthController();
               await authCtrl.logout();
-
-              // Hapus semua riwayat navigasi dan kembali ke halaman Login
               if (context.mounted) {
                 Navigator.pushAndRemoveUntil(
                   context,
@@ -52,16 +89,88 @@ class ReportsScreen extends StatelessWidget {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          // Page title
           Text('Reports Overview', style: AppTextStyles.headlineXl()),
           const SizedBox(height: 6),
-          Text(
-            'Your scanning and spending statistics for this month.',
-            style: AppTextStyles.bodyMd(),
-          ),
-          const SizedBox(height: 24),
 
-          // Total spending card
+          // ── TAMBAHAN: Navigasi bulan ──────────────────────────────────
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                IconButton(
+                  icon: const Icon(Icons.chevron_left),
+                  onPressed: () => _changeMonth(-1),
+                ),
+                Text(
+                  DateFormat('MMMM yyyy').format(_selectedMonth),
+                  style: AppTextStyles.headlineMd(),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.chevron_right),
+                  // ── TAMBAHAN: null = tombol disabled jika sudah bulan ini ──
+                  onPressed:
+                      _selectedMonth.year == DateTime.now().year &&
+                          _selectedMonth.month == DateTime.now().month
+                      ? null
+                      : () => _changeMonth(1),
+                ),
+              ],
+            ),
+          ),
+
+          // ─────────────────────────────────────────────────────────────
+          const SizedBox(height: 8),
+
+          // ── TAMBAHAN: Tombol Export PDF ────────────────────────────────
+          Align(
+            alignment: Alignment.centerRight,
+            child: TextButton.icon(
+              onPressed: _isExporting || allReceipts.isEmpty
+                  ? null
+                  : () async {
+                      setState(() {
+                        _isExporting = true;
+                      });
+                      try {
+                        await PdfService.exportMonthlyRecap(
+                          _selectedMonth,
+                          allReceipts,
+                        );
+                      } catch (e) {
+                        if (mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text('Gagal export PDF: $e')),
+                          );
+                        }
+                      } finally {
+                        if (mounted) {
+                          setState(() {
+                            _isExporting = false;
+                          });
+                        }
+                      }
+                    },
+              icon: _isExporting
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.picture_as_pdf_outlined, size: 20),
+              label: Text(_isExporting ? 'Exporting...' : 'Export PDF'),
+              style: TextButton.styleFrom(
+                foregroundColor: AppColors.primary,
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(99),
+                  side: BorderSide(color: AppColors.primary.withValues(alpha: 0.5)),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+
           _StatCard(
             label: 'TOTAL SPENDING',
             icon: Icons.credit_card_outlined,
@@ -74,26 +183,15 @@ class ReportsScreen extends StatelessWidget {
                   style: AppTextStyles.numericDisplay(),
                 ),
                 const SizedBox(height: 6),
-                Row(
-                  children: [
-                    const Icon(
-                      Icons.trending_down,
-                      color: AppColors.secondary,
-                      size: 18,
-                    ),
-                    const SizedBox(width: 4),
-                    Text(
-                      '12% less than last month',
-                      style: AppTextStyles.label(color: AppColors.secondary),
-                    ),
-                  ],
+                Text(
+                  'Based on $scanned receipts',
+                  style: AppTextStyles.bodyMd(),
                 ),
               ],
             ),
           ),
           const SizedBox(height: 12),
 
-          // Receipts scanned card
           _StatCard(
             label: 'RECEIPTS SCANNED',
             icon: Icons.receipt_long_outlined,
@@ -112,7 +210,6 @@ class ReportsScreen extends StatelessWidget {
           ),
           const SizedBox(height: 12),
 
-          // Cloud sync progress
           _StatCard(
             label: 'CLOUD SYNC PROGRESS',
             trailing: Text(
@@ -158,7 +255,6 @@ class ReportsScreen extends StatelessWidget {
           ),
           const SizedBox(height: 12),
 
-          // Quick settings
           Container(
             decoration: BoxDecoration(
               color: AppColors.surfaceContainerHigh,
@@ -185,13 +281,20 @@ class ReportsScreen extends StatelessWidget {
                   ),
                 ),
                 _SettingsTile(
-                  icon: Icons.person_outline,
-                  label: 'Account',
+                  icon: Icons.lock_outline,
+                  label: 'Ganti Password',
                   trailing: const Icon(
                     Icons.chevron_right,
                     color: AppColors.onSurfaceVariant,
                   ),
-                  onTap: () {},
+                  onTap: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => const AccountSettingsScreen(),
+                      ),
+                    );
+                  },
                 ),
                 const SizedBox(height: 8),
               ],
@@ -202,15 +305,9 @@ class ReportsScreen extends StatelessWidget {
       ),
     );
   }
-
-  String _formatAmount(double amount) {
-    final f = amount
-        .toStringAsFixed(0)
-        .replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (m) => '.');
-    return 'Rp $f';
-  }
 }
 
+// _StatCard dan _SettingsTile tidak berubah
 class _StatCard extends StatelessWidget {
   final String label;
   final Widget child;
@@ -245,7 +342,6 @@ class _StatCard extends StatelessWidget {
               Expanded(child: Text(label, style: AppTextStyles.labelCaps())),
               if (icon != null)
                 Icon(icon, color: iconColor ?? AppColors.primary, size: 22),
-              // ignore: use_null_aware_elements
               if (trailing != null) trailing!,
             ],
           ),

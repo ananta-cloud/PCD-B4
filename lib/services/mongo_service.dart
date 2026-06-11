@@ -1,8 +1,10 @@
 import 'dart:developer';
 import 'package:mongo_dart/mongo_dart.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
-import 'package:bcrypt/bcrypt.dart'; 
+import 'package:bcrypt/bcrypt.dart';
 import 'package:hive_flutter/hive_flutter.dart';
+import '../models/receipt.dart';
+import '../repositories/receipt_repository.dart';
 
 class MongoService {
   static Db? _db;
@@ -17,7 +19,7 @@ class MongoService {
   static Future<void> connect() async {
     try {
       final mongoUri = dotenv.env['MONGO_URL'] ?? dotenv.env['MONGO_URI'];
-      
+
       if (mongoUri == null || mongoUri.isEmpty) {
         log("⚠️ MONGO_URI tidak ditemukan di .env, skip koneksi MongoDB");
         return;
@@ -38,7 +40,9 @@ class MongoService {
   /// Fungsi ini yang sebelumnya hilang (mengambil koleksi dari database)
   static DbCollection getCollection(String name) {
     if (_db == null || !_db!.isConnected) {
-      throw Exception("Tidak ada koneksi ke MongoDB. Pastikan internet tersambung.");
+      throw Exception(
+        "Tidak ada koneksi ke MongoDB. Pastikan internet tersambung.",
+      );
     }
     return _db!.collection(name);
   }
@@ -51,7 +55,7 @@ class MongoService {
       if (!isConnected) await connect();
 
       var collection = getCollection(usersCollection);
-      
+
       // Cek apakah email sudah ada
       var existingUser = await collection.findOne(where.eq('email', email));
       if (existingUser != null) {
@@ -65,10 +69,10 @@ class MongoService {
       // 2. Simpan password yang sudah di-hash
       await collection.insert({
         'email': email,
-        'password': hashedPassword, 
+        'password': hashedPassword,
         'createdAt': DateTime.now(),
       });
-      
+
       log("✅ Registrasi berhasil");
       return true;
     } catch (e) {
@@ -90,15 +94,22 @@ class MongoService {
       }
 
       final String storedHashedPassword = user['password'];
-      final bool isPasswordCorrect = BCrypt.checkpw(password, storedHashedPassword);
+      final bool isPasswordCorrect = BCrypt.checkpw(
+        password,
+        storedHashedPassword,
+      );
 
       if (isPasswordCorrect) {
         currentUserId = user['_id'].toHexString();
         currentUserEmail = user['email'];
-        
+
         var sessionBox = await Hive.openBox('session');
         await sessionBox.put('userId', currentUserId);
         await sessionBox.put('email', currentUserEmail);
+
+        // ── TAMBAHAN: Tarik data dari MongoDB ke Hive lokal ──
+        await syncReceiptsFromMongo();
+        // ─────────────────────────────────────────────────────
 
         log("✅ Login berhasil! ID: $currentUserId");
         return true;
@@ -123,10 +134,8 @@ class MongoService {
   }
   // ==================== RECEIPTS ====================
 
-  /// Fungsi untuk menyimpan struk baru ke MongoDB
   static Future<bool> insertReceipt(
-    String storeName,
-    double totalAmount,
+    double totalAmount, // <-- Hanya menyisakan totalAmount
   ) async {
     if (currentUserId == null) {
       log("❌ User belum login!");
@@ -136,8 +145,8 @@ class MongoService {
     try {
       var collection = getCollection(receiptsCollection);
       await collection.insert({
-        'userId': currentUserId, // Mengaitkan struk dengan user yang login
-        'storeName': storeName,
+        'userId': currentUserId,
+        // 'storeName': storeName, <-- BARI INI DIHAPUS
         'totalAmount': totalAmount,
         'scanDate': DateTime.now(),
         'isSynced': true,
@@ -167,6 +176,148 @@ class MongoService {
     } catch (e) {
       log("❌ Gagal mengambil history receipt: $e");
       return [];
+    }
+  }
+
+  static Future<bool> changePassword(
+    String currentPassword,
+    String newPassword,
+  ) async {
+    try {
+      if (currentUserId == null) return false;
+
+      var collection = getCollection(usersCollection);
+      // Cari user berdasarkan ID yang sedang aktif
+      var user = await collection.findOne(
+        where.id(ObjectId.parse(currentUserId!)),
+      );
+
+      if (user == null) return false;
+
+      // 1. Verifikasi password lama
+      final String storedHashedPassword = user['password'];
+      final bool isPasswordCorrect = BCrypt.checkpw(
+        currentPassword,
+        storedHashedPassword,
+      );
+
+      if (!isPasswordCorrect) {
+        log("❌ Password lama salah");
+        return false;
+      }
+
+      // 2. Hash password baru
+      final String newHashedPassword = BCrypt.hashpw(
+        newPassword,
+        BCrypt.gensalt(),
+      );
+
+      // 3. Update ke database
+      await collection.update(
+        where.id(ObjectId.parse(currentUserId!)),
+        modify.set('password', newHashedPassword),
+      );
+
+      log("✅ Password berhasil diubah");
+      return true;
+    } catch (e) {
+      log("❌ Gagal ganti password: $e");
+      return false;
+    }
+  }
+
+  static Future<void> syncReceiptsFromMongo() async {
+    if (currentUserId == null) return;
+
+    try {
+      if (!isConnected) await connect();
+
+      final collection = getCollection(receiptsCollection);
+      final docs = await collection
+          .find(where.eq('userId', currentUserId))
+          .toList();
+
+      for (final doc in docs) {
+        final id = doc['_id'].toHexString();
+        final receipt = Receipt(
+          id: id,
+          userId: doc['userId'] as String,
+          totalAmount: (doc['totalAmount'] as num).toDouble(),
+          confidenceScore: 1.0, // tidak ada di MongoDB, default 1.0
+          scannedAt: doc['scanDate'] is DateTime
+              ? doc['scanDate'] as DateTime
+              : DateTime.parse(doc['scanDate'].toString()),
+          isSynced: doc['isSynced'] as bool? ?? true,
+        );
+
+        // Hanya simpan jika belum ada di Hive
+        if (ReceiptRepository.getById(id) == null) {
+          await ReceiptRepository.addReceipt(receipt);
+        }
+      }
+
+      log("✅ Sync dari MongoDB selesai: ${docs.length} receipts");
+    } catch (e) {
+      log("❌ Gagal sync dari MongoDB: $e");
+    }
+  }
+
+  static Future<void> restoreSession() async {
+    final sessionBox = await Hive.openBox('session');
+    final savedUserId = sessionBox.get('userId');
+    final savedEmail = sessionBox.get('email');
+
+    if (savedUserId != null) {
+      currentUserId = savedUserId;
+      currentUserEmail = savedEmail;
+      log("✅ Session restored: $currentUserId");
+
+      // ── TAMBAHAN: Sync ulang saat app restart ──
+      await syncReceiptsFromMongo();
+      // ──────────────────────────────────────────
+    }
+  }
+
+  /// Sinkronisasi data dari MongoDB Cloud ke Hive Local
+  static Future<void> syncFromMongo() async {
+    if (currentUserId == null) return;
+
+    try {
+      if (!isConnected) await connect();
+
+      var collection = getCollection(receiptsCollection);
+
+      // Ambil semua data milik user dari MongoDB
+      final docs = await collection
+          .find(where.eq('userId', currentUserId))
+          .toList();
+
+      for (final doc in docs) {
+        final id = doc['_id'].toHexString();
+
+        // Cek apakah data sudah ada di Hive (lokal) agar tidak duplikat
+        if (ReceiptRepository.getById(id) == null) {
+          final receipt = Receipt(
+            id: id,
+            userId: doc['userId'] as String,
+            totalAmount: (doc['totalAmount'] as num).toDouble(),
+            confidenceScore: 1.0, // Default confidence
+            // Menangani scanDate baik berupa DateTime object atau String
+            scannedAt: doc['scanDate'] is DateTime
+                ? doc['scanDate'] as DateTime
+                : DateTime.parse(doc['scanDate'].toString()),
+            isSynced: true,
+            imagePath: doc['imagePath'] as String?,
+          );
+
+          // Simpan ke Hive
+          await ReceiptRepository.addReceipt(receipt);
+          log("📥 Synced receipt: $id");
+        }
+      }
+      log("✅ Sync dari MongoDB selesai: ${docs.length} receipts");
+    } catch (e) {
+      log("❌ Gagal sync dari MongoDB: $e");
     }
   }
 }
