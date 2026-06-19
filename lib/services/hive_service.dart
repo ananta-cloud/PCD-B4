@@ -49,12 +49,11 @@ class HiveService {
     Hive.registerAdapter(UserAdapter());
     Hive.registerAdapter(AppSettingsAdapter());
 
-    // 3. Buka boxes TANPA try-catch agar error terlihat
-    // Jika ada box yang gagal, aplikasi akan langsung ke catch di main.dart
-    await Hive.openBox<Receipt>(receiptsBoxName);
-    await Hive.openBox<User>(usersBoxName);
-    await Hive.openBox<AppSettings>(settingsBoxName);
-    await Hive.openBox('session'); // Tambahkan juga box session
+    // 3. Buka boxes dengan try-catch untuk recovery otomatis jika data korup (RangeError)
+    await _safeOpenBox<Receipt>(receiptsBoxName);
+    await _safeOpenBox<User>(usersBoxName);
+    await _safeOpenBox<AppSettings>(settingsBoxName);
+    await _safeOpenBox<dynamic>('session'); // Tambahkan juga box session
 
     // 4. Initialize default settings
     final settingsBox = Hive.box<AppSettings>(settingsBoxName);
@@ -72,7 +71,15 @@ class HiveService {
       await Hive.openBox<T>(boxName);
       print('✓ Box $boxName dibuka');
     } catch (e) {
-      print('⚠️ Box $boxName gagal: $e');
+      print('⚠️ Box $boxName korup/gagal: $e. Mencoba recovery dengan menghapus data...');
+      try {
+        await Hive.deleteBoxFromDisk(boxName);
+        await Hive.openBox<T>(boxName);
+        print('✓ Box $boxName berhasil direcover dan dibuka kembali');
+      } catch (e2) {
+        print('❌ Box $boxName gagal direcover: $e2');
+        rethrow;
+      }
     }
   }
 

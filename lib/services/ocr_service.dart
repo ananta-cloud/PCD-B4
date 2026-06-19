@@ -48,6 +48,11 @@ class ParsedReceipt {
   bool get isValid => total > 0;
 }
 
+String _buildFormatted(List<ReceiptItem> items) {
+  if (items.isEmpty) return '';
+  return items.map((i) => '${i.name}   ${i.qty} x ${i.unitPrice}').join('\n');
+}
+
 /// OCR Service — uses Google ML Kit for offline text recognition.
 class OcrService {
 
@@ -157,6 +162,9 @@ class OcrService {
       confidence: confidence,
       currency: 'Rp',
     );
+    } finally {
+      textRecognizer.close();
+    }
   }
 
   /// Analyze a camera frame for text presence (used for auto-scan).
@@ -168,8 +176,13 @@ class OcrService {
     final inputImage = _inputImageFromCamera(image, sensorOrientation);
     if (inputImage == null) return 0;
 
-    final recognized = await _textRecognizer.processImage(inputImage);
-    return recognized.blocks.length;
+    final textRecognizer = TextRecognizer(script: TextRecognitionScript.latin);
+    try {
+      final recognized = await textRecognizer.processImage(inputImage);
+      return recognized.blocks.length;
+    } finally {
+      textRecognizer.close();
+    }
   }
 
   /// Convert CameraImage (YUV420/NV21) to InputImage for ML Kit.
@@ -212,9 +225,6 @@ class OcrService {
         return InputImageRotation.rotation270deg;
       default:
         return InputImageRotation.rotation0deg;
-    }
-    } finally {
-      textRecognizer.close();
     }
   }
 

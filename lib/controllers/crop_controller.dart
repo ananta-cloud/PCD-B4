@@ -185,13 +185,10 @@ class CropController extends ChangeNotifier {
       final croppedFile = File(tempPath)
         ..writeAsBytesSync(img.encodeJpg(croppedImg, quality: 92));
 
-      _processingStep = 'Konversi grayscale...';
+      _processingStep = 'Memproses gambar (grayscale & thresholding)...';
       notifyListeners();
-      final grayFile = await ImageProcessingService.convertToGrayscale(croppedFile);
-
-      _processingStep = 'Binary thresholding...';
-      notifyListeners();
-      final threshFile = await ImageProcessingService.applyThreshold(grayFile);
+      final processedResult = await ImageProcessingService.processFullPipeline(croppedFile);
+      final threshFile = processedResult.thresholdFile;
 
       _processingStep = 'Mendeteksi area dengan AI YOLOv8...';
       notifyListeners();
@@ -225,6 +222,103 @@ class CropController extends ChangeNotifier {
       return (croppedFile: croppedFile, parsedReceipt: parsedReceipt);
     } catch (e) {
       _errorMessage = "Error process crop: $e";
+      _isProcessing = false;
+      notifyListeners();
+      return null;
+    }
+  }
+
+  Future<({File croppedFile, ParsedReceipt parsedReceipt})?> autoProcess(File imageFile) async {
+    _isProcessing = true;
+    _processingStep = 'Menganalisis gambar...';
+    notifyListeners();
+
+    try {
+      final bytes = await imageFile.readAsBytes();
+      final image = img.decodeImage(bytes);
+      if (image == null) throw "Gagal decode image";
+      _originalImage = image;
+
+      // 1. Detect bounding boxes in original image to find the receipt
+      final detections = await YoloService.detect(imageFile);
+      Rect? receiptBox;
+      double highestConf = 0;
+      for (var d in detections) {
+        if (d.label == 'struk_belanja' && d.confidence > highestConf) {
+          receiptBox = d.boundingBox;
+          highestConf = d.confidence;
+        }
+      }
+
+      // 2. Set crop boundaries based on YOLO detection
+      if (receiptBox != null) {
+        // Pad the box slightly so we don't cut off text edges
+        const padding = 20.0;
+        final left = (receiptBox.left - padding).clamp(0.0, image.width.toDouble());
+        final top = (receiptBox.top - padding).clamp(0.0, image.height.toDouble());
+        final right = (receiptBox.right + padding).clamp(0.0, image.width.toDouble());
+        final bottom = (receiptBox.bottom + padding).clamp(0.0, image.height.toDouble());
+        _cropTopLeft = Offset(left, top);
+        _cropSize = Size(right - left, bottom - top);
+      } else {
+        // Fallback to full image if no receipt box found
+        _cropTopLeft = Offset.zero;
+        _cropSize = Size(image.width.toDouble(), image.height.toDouble());
+      }
+
+      _processingStep = 'Memotong gambar (Auto-Crop)...';
+      notifyListeners();
+
+      // 3. Crop the image
+      final croppedImg = img.copyCrop(
+        _originalImage!,
+        x: _cropTopLeft.dx.round().clamp(0, _originalImage!.width - 1),
+        y: _cropTopLeft.dy.round().clamp(0, _originalImage!.height - 1),
+        width: _cropSize.width.round().clamp(1, _originalImage!.width),
+        height: _cropSize.height.round().clamp(1, _originalImage!.height),
+      );
+
+      final tempPath = '${Directory.systemTemp.path}/crop_${DateTime.now().millisecondsSinceEpoch}.jpg';
+      final croppedFile = File(tempPath)..writeAsBytesSync(img.encodeJpg(croppedImg, quality: 92));
+
+      // 4. Thresholding pipeline
+      _processingStep = 'Memproses gambar (grayscale & thresholding)...';
+      notifyListeners();
+      final processedResult = await ImageProcessingService.processFullPipeline(croppedFile);
+      final threshFile = processedResult.thresholdFile;
+
+      // 5. Detect items and total in the cropped image
+      _processingStep = 'Mendeteksi area dengan AI YOLOv8...';
+      notifyListeners();
+      
+      final croppedDetections = await YoloService.detect(croppedFile);
+      
+      List<Rect> itemBoxes = [];
+      Rect? totalBox;
+      
+      for (var d in croppedDetections) {
+        if (d.label == 'item_belanja') {
+          itemBoxes.add(d.boundingBox);
+        } else if (d.label == 'total') {
+          totalBox = d.boundingBox; 
+        }
+      }
+
+      // 6. OCR Text Extraction
+      _processingStep = 'Menjalankan OCR...';
+      notifyListeners();
+
+      final parsedReceipt = await OcrService.processImage(
+        threshFile,
+        itemBoxes: itemBoxes,
+        totalBox: totalBox,
+      );
+      
+      _isProcessing = false;
+      notifyListeners();
+      return (croppedFile: croppedFile, parsedReceipt: parsedReceipt);
+    } catch (e) {
+      _errorMessage = "Error auto process: $e";
       _isProcessing = false;
       notifyListeners();
       return null;
